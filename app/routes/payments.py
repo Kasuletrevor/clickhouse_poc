@@ -1,3 +1,5 @@
+from typing import Optional
+
 from fastapi import APIRouter, Query, Request, status
 
 from app.schemas.payments import PaymentCreate, PaymentStatusUpdate
@@ -12,8 +14,8 @@ def service(request: Request):
 @router.get("")
 def list_payments(
     request: Request,
-    search: str | None = None,
-    payment_status: str | None = Query(default=None, alias="status"),
+    search: Optional[str] = None,
+    payment_status: Optional[str] = Query(default=None, alias="status"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ):
