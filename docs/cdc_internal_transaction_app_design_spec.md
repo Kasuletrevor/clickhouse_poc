@@ -4,7 +4,7 @@
 **Web application:** Trusted internal transactional system  
 **Frontend:** HTML + CSS + vanilla JavaScript  
 **Backend:** FastAPI  
-**Repository root on the POC host:** `/home/jkasule/cdc-clickhouse-poc`  
+**Repository root on POC host:** `/home/jkasule/cdc-clickhouse-poc`  
 **Status:** CDC backend proven end-to-end; web application is the next layer.
 
 ---
@@ -13,7 +13,7 @@
 
 Build a polished internal transactional web application on top of the existing CDC POC.
 
-The app must look like a real internal business system rather than a CDC demo. Normal users should be able to operate Taxpayers, Stations and Payments without knowing anything about Kafka, Debezium, SCNs or LogMiner.
+The app must look like a real internal business system rather than a CDC demo. Normal users should be able to operate Taxpayers, Stations and Payments without needing to know anything about Kafka, Debezium, SCNs or LogMiner.
 
 Business-facing screens:
 
@@ -91,7 +91,68 @@ The propagation delay is expected and useful to demonstrate.
 
 ---
 
-## 3. Existing infrastructure
+## 3. Current schema freeze — important
+
+For the current application phase, the existing `CDC_APP.TAXPAYER` and `CDC_APP.STATION` schemas are considered **frozen** unless the user explicitly approves a later schema change.
+
+Do **not** add:
+
+```text
+TAXPAYER.STATUS
+STATION.STATUS
+```
+
+Do not add other lifecycle fields merely to support the first application milestone.
+
+This decision supersedes any earlier draft language that proposed ACTIVE/INACTIVE columns.
+
+### Consequences for this phase
+
+Taxpayer operations supported now:
+
+```text
+list
+view
+create
+edit
+station reassignment
+```
+
+Station operations supported now:
+
+```text
+list
+view
+create
+edit
+```
+
+Deferred until a later explicit design decision:
+
+```text
+taxpayer deactivate/reactivate
+station deactivate/reactivate
+hard-delete lifecycle rules
+```
+
+Payments may validate:
+
+```text
+amount > 0
+taxpayer exists
+referenced taxpayer station exists
+payment ID unique
+payment status is valid
+payment status transition is valid
+```
+
+Payments must **not** validate `taxpayer ACTIVE` or `station ACTIVE`, because those source fields do not currently exist and must not be introduced in this phase.
+
+This schema freeze deliberately reduces risk to the already-proven CDC pipeline while the first web application is being built.
+
+---
+
+## 4. Existing infrastructure
 
 Main host:
 
@@ -120,19 +181,23 @@ ClickHouse   8123 HTTP
 ClickHouse   9000 native
 ```
 
-Kafbat is available at `http://10.1.78.38:8080` from permitted internal hosts.
+Kafbat is available at:
 
-Corporate proxy exists at:
+```text
+http://10.1.78.38:8080
+```
+
+Corporate proxy:
 
 ```text
 http://proxy.ura.local:8080
 ```
 
-Do not redesign host proxy/networking/firewall behavior unless there is a specific demonstrated requirement.
+Do not redesign host proxy/networking/firewall behavior unless a specific demonstrated requirement exists.
 
 ---
 
-## 4. Oracle source model
+## 5. Oracle source model
 
 Database/PDB:
 
@@ -151,7 +216,7 @@ Use environment variables for credentials.
 
 ### STATION
 
-Existing business fields:
+Existing fields:
 
 ```text
 STATION_ID
@@ -210,30 +275,11 @@ SUCCESSFUL
 REVERSED
 ```
 
-### Approved small source schema change
-
-Add operational status to TAXPAYER and STATION:
-
-```sql
-STATUS VARCHAR2(20) DEFAULT 'ACTIVE' NOT NULL
-```
-
-Allowed values:
-
-```text
-ACTIVE
-INACTIVE
-```
-
-Backfill existing rows to `ACTIVE`.
-
-Use deactivate/reactivate semantics rather than normal hard deletion.
-
 Business updates should set `UPDATED_AT = SYSTIMESTAMP` where appropriate.
 
 ---
 
-## 5. CDC prerequisites already proven
+## 6. CDC prerequisites already proven
 
 Oracle already has:
 
@@ -248,7 +294,7 @@ Do not rebuild this part unless a concrete failure requires it.
 
 ---
 
-## 6. Debezium design
+## 7. Debezium design
 
 Two connectors exist intentionally.
 
@@ -289,7 +335,7 @@ metadata fields copied before unwrap
 delete records rewritten rather than silently lost
 ```
 
-Flat events retain fields such as:
+Flat events retain lineage fields such as:
 
 ```text
 __op
@@ -303,11 +349,11 @@ __source_user_name
 __deleted
 ```
 
-The flat connector exists to make ClickHouse ingestion simple while retaining lineage.
+The flat connector exists to make ClickHouse ingestion simple while retaining useful lineage.
 
 ---
 
-## 7. Kafka
+## 8. Kafka
 
 Kafka runs in KRaft mode.
 
@@ -325,7 +371,7 @@ Kafka is a durable event-streaming boundary. Do not bypass it with direct Oracle
 
 ---
 
-## 8. ClickHouse analytical model
+## 9. ClickHouse analytical model
 
 Database:
 
@@ -385,7 +431,7 @@ It exposes business-friendly payment attributes plus station-at-payment and curr
 
 ---
 
-## 9. Historical semantic requirement
+## 10. Historical semantic requirement
 
 This has already been proven and must remain true.
 
@@ -414,7 +460,7 @@ Do not replace the current SCD2/ASOF-style semantics with a naive join to the la
 
 ---
 
-## 10. Ordering and time semantics
+## 11. Ordering and time semantics
 
 Keep these concepts separate:
 
@@ -428,11 +474,11 @@ ingested_at        ClickHouse ingestion time
 
 `ingested_at` is observability metadata, not authoritative source ordering.
 
-Current-state logic must continue using source-derived version information such as commit SCN/SCN, sequence metadata and Kafka lineage as a final deterministic tiebreaker where required.
+Current-state logic must continue using source-derived version information such as commit SCN/SCN, source sequence metadata and Kafka lineage as a final deterministic tiebreaker where required.
 
 ---
 
-## 11. Simulator
+## 12. Simulator
 
 Existing files:
 
@@ -461,7 +507,7 @@ Preserve this rule when adding web simulator controls.
 
 ---
 
-## 12. UI direction
+## 13. UI direction
 
 Approved visual style:
 
@@ -493,9 +539,11 @@ Suggested CSS tokens:
 --danger: #B91C1C;
 ```
 
+Status badges should be used only for entities that actually have a source status, such as PAYMENT. Do not invent taxpayer/station status just for presentation.
+
 ---
 
-## 13. Frontend approach
+## 14. Frontend approach
 
 Use:
 
@@ -523,7 +571,7 @@ toast layer
 
 ---
 
-## 14. Screen behavior
+## 15. Screen behavior
 
 ### Dashboard
 
@@ -533,7 +581,7 @@ Business-facing KPIs:
 
 ```text
 Total Taxpayers
-Active Stations
+Total Stations
 Payments Today
 Amount Collected Today
 ```
@@ -547,33 +595,37 @@ Recent Payments
 Recent Taxpayer Activity
 ```
 
+Do not show `Active Stations` unless a real lifecycle field is later approved and added to the source system.
+
 ### Taxpayers
 
 Reads/writes Oracle.
 
-Features:
+Current-phase features:
 
 - search
-- type/station/status filters
+- type/station filters
 - create drawer
 - edit drawer
 - station reassignment
-- deactivate/reactivate
 
 No normal hard delete.
+
+Deactivate/reactivate is deferred.
 
 ### Stations
 
 Reads/writes Oracle.
 
-Features:
+Current-phase features:
 
+- list/search
 - create/edit
 - region/district fields
-- deactivate/reactivate
-- reject deactivation if active taxpayers are assigned
 
-Return a friendly business message rather than exposing an Oracle FK error.
+No normal hard delete.
+
+Deactivate/reactivate is deferred.
 
 ### Payments
 
@@ -651,29 +703,36 @@ The simulator still writes only to Oracle.
 
 ---
 
-## 15. FastAPI route contract
+## 16. FastAPI route contract
 
 ### Oracle-backed operational API
+
+Current phase:
 
 ```text
 GET    /api/taxpayers
 GET    /api/taxpayers/{tin}
 POST   /api/taxpayers
 PUT    /api/taxpayers/{tin}
-POST   /api/taxpayers/{tin}/deactivate
-POST   /api/taxpayers/{tin}/activate
 
 GET    /api/stations
 GET    /api/stations/{id}
 POST   /api/stations
 PUT    /api/stations/{id}
-POST   /api/stations/{id}/deactivate
-POST   /api/stations/{id}/activate
 
 GET    /api/payments
 GET    /api/payments/{id}
 POST   /api/payments
 POST   /api/payments/{id}/status
+```
+
+Deferred, do not implement now:
+
+```text
+/api/taxpayers/{tin}/deactivate
+/api/taxpayers/{tin}/activate
+/api/stations/{id}/deactivate
+/api/stations/{id}/activate
 ```
 
 ### ClickHouse-backed analytical API
@@ -704,7 +763,7 @@ GET  /api/simulator/status
 
 ---
 
-## 16. Validation and errors
+## 17. Validation and errors
 
 FastAPI is authoritative. Frontend checks are convenience only.
 
@@ -713,14 +772,14 @@ Payment creation validates:
 ```text
 amount > 0
 taxpayer exists
-taxpayer ACTIVE
-assigned station exists
-assigned station ACTIVE
+referenced taxpayer station exists
 status allowed
 payment ID unique
 ```
 
-Station deactivation must fail if active taxpayers are assigned.
+Payment update validates the approved state machine.
+
+Do not add ACTIVE/INACTIVE checks for taxpayer/station in this phase.
 
 Use a stable API error shape:
 
@@ -745,7 +804,7 @@ Never leak raw `ORA-xxxx`, credentials, connection strings, SQL or stack traces 
 
 ---
 
-## 17. Failure isolation
+## 18. Failure isolation
 
 If Debezium is down:
 
@@ -757,7 +816,7 @@ Pipeline Health shows degraded.
 If ClickHouse is down:
 
 ```text
-source CRUD continues
+source operations continue
 Dashboard/Reports/Event Monitor show analytics unavailable
 ```
 
@@ -765,7 +824,7 @@ This separation is an important architecture demonstration.
 
 ---
 
-## 18. Project structure target
+## 19. Project structure target
 
 ```text
 app/
@@ -791,20 +850,20 @@ requirements.txt
 Responsibilities:
 
 ```text
-routes       HTTP concerns
-services     business rules
-schemas      request/response validation
-oracle.py    Oracle access
+routes        HTTP concerns
+services      business rules
+schemas       request/response validation
+oracle.py     Oracle access
 clickhouse.py ClickHouse access
-static/js    browser behavior
-static/css   design system
+static/js     browser behavior
+static/css    design system
 ```
 
 Avoid a monolithic `main.py` and avoid SQL scattered through route handlers.
 
 ---
 
-## 19. Security boundaries
+## 20. Security boundaries
 
 Even without authentication:
 
@@ -819,7 +878,7 @@ Even without authentication:
 
 ---
 
-## 20. Polling
+## 21. Polling
 
 Do not add WebSockets initially.
 
@@ -834,7 +893,7 @@ Simulator status   ~2 seconds
 
 ---
 
-## 21. Testing requirements
+## 22. Testing requirements
 
 Business-rule tests should include:
 
@@ -845,10 +904,11 @@ SUCCESSFUL → REVERSED allowed
 REVERSED → SUCCESSFUL rejected
 negative amount rejected
 zero amount rejected
-inactive taxpayer rejected
-inactive station rejected
-station in use cannot deactivate
+missing taxpayer rejected
+missing taxpayer station reference rejected
 ```
+
+Do not add tests that assume taxpayer/station ACTIVE/INACTIVE fields.
 
 Critical end-to-end smoke test:
 
@@ -864,11 +924,9 @@ verify ClickHouse raw/current
 verify serving view
 ```
 
-Do not make every test depend on the whole CDC stack.
-
 ---
 
-## 22. Deployment
+## 23. Deployment
 
 Development:
 
@@ -876,97 +934,108 @@ Development:
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-Stable deployment should use systemd with automatic restart and journal logs.
-
-Target URL:
+Target internal URL:
 
 ```text
 http://10.1.78.38:8000
 ```
 
-Test network accessibility before a demo rather than changing firewall rules blindly.
+Stable deployment should use systemd with an environment file and automatic restart.
+
+Do not change network controls until actual accessibility is tested from the intended demo host.
 
 ---
 
-## 23. Explicit non-goals
+## 24. Explicit non-goals
 
-Do not add unless requested later:
+Do not add unless later requested:
 
 ```text
-authentication/JWT/roles
+authentication
+JWT
+roles
 React/Vue/Angular
 Node/npm build chain
 WebSockets
-Kafka admin UI
+Kafka admin console
 SQL editor
 general shell runner
-Power BI replacement
-complex workflow engine
-FastAPI Dockerization
+replacement for Power BI
+large reporting engine
+TAXPAYER.STATUS
+STATION.STATUS
+taxpayer/station deactivate-reactivate workflow
 ```
 
 ---
 
-## 24. Implementation order
+## 25. Implementation order
 
-1. App shell and design system.
-2. Payments vertical slice.
-3. Taxpayers.
-4. Stations.
-5. Dashboard.
-6. Event Monitor.
-7. Pipeline Health.
-8. Simulator controls.
-9. Reports/polish.
-10. systemd deployment.
-
-The first implementation milestone should be **application shell + complete Payments vertical slice**.
-
----
-
-## 25. Acceptance criteria
-
-A complete POC demonstration should support:
-
-1. Open app without login.
-2. Create payment from UI.
-3. Payment is committed to Oracle.
-4. Oracle-backed Payments screen shows it immediately.
-5. Debezium captures the commit.
-6. Kafka carries the event.
-7. ClickHouse receives it.
-8. Event Monitor shows it.
-9. Power BI reflects it.
-10. Payment status update follows the same path.
-11. Taxpayer station move preserves historical station-at-payment.
-12. Pipeline Health shows consumer lag returning to zero.
-13. CRUD continues when analytical services are unavailable.
-14. No direct application writes to Kafka or ClickHouse.
-15. No secrets/raw Oracle errors appear in the browser.
-16. UI follows the approved navy/yellow direction with no logo.
+```text
+Phase 0  inspect repository and confirm schema
+Phase 1  application shell
+Phase 2  Payments vertical slice
+Phase 3  Taxpayers create/edit/reassign
+Phase 4  Stations create/edit
+Phase 5  Dashboard
+Phase 6  Event Monitor
+Phase 7  Pipeline Health
+Phase 8  Simulator Control
+Phase 9  Reports
+Phase 10 systemd/deployment
+```
 
 ---
 
-## 26. Codex instructions
+## 26. First milestone acceptance
+
+The first milestone is:
+
+```text
+Application shell + Payments vertical slice
+```
+
+It must provide:
+
+- FastAPI startup
+- navy/yellow shell
+- SPA-style navigation
+- Oracle-backed payment table
+- Create Payment drawer
+- Payment Detail drawer
+- payment state transitions
+- friendly errors and toasts
+
+Creating a payment must follow:
+
+```text
+UI → FastAPI → Oracle COMMIT → Debezium → Kafka → ClickHouse
+```
+
+No source-schema change to TAXPAYER or STATION is required for this milestone.
+
+---
+
+## 27. Codex instructions
 
 Before coding:
 
-1. Inspect the existing repository and current compose/simulator files.
-2. Treat working CDC infrastructure as something to preserve, not rebuild.
-3. Do not delete/recreate topics, tables or views casually.
-4. Do not rotate credentials automatically.
-5. Do not change proxy/network settings unnecessarily.
-6. Do not introduce React/npm.
-7. Work vertically and keep commits logically scoped.
-8. Add tests around business rules.
-9. Preserve the SCD2 point-in-time semantics.
-10. Verify that all source writes still originate in Oracle.
+1. Inspect the repository.
+2. Preserve the existing Docker/CDC infrastructure.
+3. Treat current Oracle TAXPAYER/STATION schema as frozen.
+4. Do not add STATUS columns to those tables.
+5. Build against the fields that actually exist.
+6. Do not publish business events to Kafka from the application.
+7. Do not write business rows directly to ClickHouse.
+8. Implement one vertical slice at a time.
+9. Add tests around payment business rules.
+10. Preserve historical station-at-payment semantics.
 
-If repository reality differs from this document, preserve working infrastructure details while maintaining the architectural intent.
+If repository reality differs from this document, preserve working infrastructure and ask before making source-schema changes.
 
 ---
 
-## 27. Product principle
+## 28. Product principle
 
 To a business user:
 
@@ -974,6 +1043,6 @@ To a business user:
 
 To an engineer:
 
-> Every committed Oracle change is captured from redo and propagated through Debezium, Kafka and ClickHouse without the source application knowing anything about the analytical pipeline.
+> Every committed Oracle change is captured from redo through Debezium and Kafka into ClickHouse, without the source application knowing anything about the analytics pipeline.
 
-That separation is the core of the project.
+That separation is the central idea of the POC.
