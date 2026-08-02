@@ -58,17 +58,33 @@ ClickHouse → Power BI / analytical APIs
 
 This separation allows the source application to continue operating independently of the analytical stack.
 
+## Current source-schema policy
+
+For the current POC phase, **do not add status columns or other lifecycle fields to `CDC_APP.TAXPAYER` or `CDC_APP.STATION`**.
+
+The application must work with the source schema that is already proven through CDC.
+
+This means:
+
+- Taxpayers can be created, viewed, edited, and reassigned to stations.
+- Stations can be created, viewed, and edited.
+- Taxpayer/station deactivate/reactivate behavior is deferred to a later phase.
+- Do not introduce `TAXPAYER.STATUS` or `STATION.STATUS` merely to support the first web-app milestone.
+- Payments may validate that the referenced taxpayer exists and that its referenced station exists, but must not assume an ACTIVE/INACTIVE field exists on either table.
+
+This schema freeze reduces risk to the already-working CDC path while the first application vertical slice is built.
+
 ## Source domain
 
-The POC currently models three transactional entities:
+The POC currently models three transactional entities.
 
 ### Stations
 
-A station has an identifier, name, region, district, operational status, and update timestamp.
+A station has an identifier, name, region, district, and update timestamp.
 
 ### Taxpayers
 
-A taxpayer has a TIN, name, taxpayer type, current station assignment, operational status, and update timestamp.
+A taxpayer has a TIN, name, taxpayer type, current station assignment, and update timestamp.
 
 ### Payments
 
@@ -140,8 +156,6 @@ These use Debezium's `ExtractNewRecordState` SMT and retain useful CDC lineage s
 
 ## ClickHouse model
 
-The analytical database is organized into layers.
-
 ### Raw CDC history
 
 ```text
@@ -149,8 +163,6 @@ raw_oracle_payment_cdc
 raw_oracle_taxpayer_cdc
 raw_oracle_station_cdc
 ```
-
-Raw tables retain multiple versions of the same business entity.
 
 ### Current state / history
 
@@ -187,7 +199,7 @@ ingested_at        ClickHouse ingestion time
 
 The Python simulator generates realistic source-side activity by writing directly to Oracle.
 
-Examples of generated events include:
+Examples include:
 
 - new payments
 - payment status transitions
@@ -244,13 +256,11 @@ Operational screens read/write Oracle. Analytical and engineering screens read C
 
 ### UI direction
 
-The approved direction is a professional internal-system interface with:
-
 - dark navy navigation
 - warm yellow/gold primary actions
 - white/light-gray content surfaces
 - compact enterprise tables
-- status badges and drawers
+- status badges where the underlying entity actually has a status field
 - no organizational logo
 - CDC terminology kept out of normal business screens
 
@@ -282,8 +292,6 @@ Recommended branch workflow:
 main
   └── feature/internal-transaction-app
 ```
-
-For application work, implement vertically rather than building every screen at once.
 
 Suggested order:
 
@@ -320,8 +328,6 @@ UI → FastAPI → Oracle COMMIT → Debezium → Kafka → ClickHouse → analy
 ```
 
 ## Acceptance principle
-
-The finished POC should communicate two things at the same time.
 
 To a business user:
 
