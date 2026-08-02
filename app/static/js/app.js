@@ -1,4 +1,5 @@
 import { PaymentsPage } from "./payments.js";
+import { StationsPage } from "./stations.js";
 import { TaxpayersPage } from "./taxpayers.js";
 
 const shell = {
@@ -19,6 +20,7 @@ async function navigate(page){
   shell.closeDrawer();
   if(page==="payments") return new PaymentsPage(shell).render();
   if(page==="taxpayers") return new TaxpayersPage(shell).render();
+  if(page==="stations") return new StationsPage(shell).render();
   shell.content.innerHTML=`<div class="placeholder"><p class="eyebrow">Planned module</p><h2>${titles[page]}</h2><p>This module is part of the approved implementation plan and will be added in the next vertical slices.</p></div>`;
 }
 document.querySelectorAll(".nav-item").forEach(btn=>btn.onclick=()=>navigate(btn.dataset.page));
