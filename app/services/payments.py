@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from decimal import Decimal
 from secrets import token_hex
-from typing import Protocol
+from typing import Optional, Protocol
 
 from app.errors import APIError
 
@@ -44,7 +44,7 @@ class PaymentService:
             raise APIError(404, "payment_not_found", f"Payment {payment_id} does not exist.")
         return payment
 
-    def create_payment(self, payment_id: str | None, taxpayer_id: str, amount: Decimal, status: str):
+    def create_payment(self, payment_id: Optional[str], taxpayer_id: str, amount: Decimal, status: str):
         if amount <= 0:
             raise APIError(422, "invalid_amount", "Payment amount must be greater than zero.")
         if status not in ALLOWED_STATUSES:
