@@ -9,8 +9,11 @@ from app.config import get_settings
 from app.errors import APIError
 from app.oracle import OracleDatabase, SourceOperationError, SourceUnavailableError
 from app.repositories.payments import OraclePaymentRepository
+from app.repositories.taxpayers import OracleTaxpayerRepository
 from app.routes.payments import router as payments_router
+from app.routes.taxpayers import router as taxpayers_router
 from app.services.payments import PaymentService
+from app.services.taxpayers import TaxpayerService
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -20,12 +23,19 @@ def default_payment_service() -> PaymentService:
     return PaymentService(OraclePaymentRepository(db))
 
 
-def create_app(payment_service=None) -> FastAPI:
-    app = FastAPI(title="Internal Transaction Application", version="0.1.0")
+def default_taxpayer_service() -> TaxpayerService:
+    db = OracleDatabase(get_settings())
+    return TaxpayerService(OracleTaxpayerRepository(db))
+
+
+def create_app(payment_service=None, taxpayer_service=None) -> FastAPI:
+    app = FastAPI(title="Internal Transaction Application", version="0.2.0")
     app.state.payment_service = payment_service or default_payment_service()
+    app.state.taxpayer_service = taxpayer_service or default_taxpayer_service()
     app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
     templates = Jinja2Templates(directory=BASE_DIR / "templates")
     app.include_router(payments_router)
+    app.include_router(taxpayers_router)
 
     @app.exception_handler(APIError)
     async def api_error_handler(_request: Request, exc: APIError):
