@@ -31,17 +31,29 @@ These checks are required for this repository:
 - [ ] SCD2 / point-in-time station semantics remain correct.
 - [ ] ClickHouse `ingested_at` is not being used as the authoritative source-event ordering field.
 
+## Current source-schema guardrail
+
+For the current application phase:
+
+- [ ] No `TAXPAYER.STATUS` column was introduced.
+- [ ] No `STATION.STATUS` column was introduced.
+- [ ] No other TAXPAYER/STATION lifecycle schema change was made without explicit approval.
+- [ ] Taxpayer/station deactivate/reactivate behavior was not assumed by the implementation.
+- [ ] Payment validation uses fields that actually exist in the current Oracle schema.
+
 ## Business rules
 
-If this PR touches source-system behavior:
+If this PR touches payment behavior:
 
 - [ ] Payment transitions are enforced server-side.
 - [ ] `PENDING → SUCCESSFUL` is allowed.
 - [ ] `PENDING → REVERSED` is allowed.
 - [ ] `SUCCESSFUL → REVERSED` is allowed.
 - [ ] `REVERSED` is terminal.
-- [ ] Taxpayer/station deactivation semantics are preserved rather than normal hard deletion.
-- [ ] A station with active taxpayers cannot be deactivated without reassignment.
+- [ ] Payment amount must be positive.
+- [ ] Referenced taxpayer must exist.
+- [ ] Referenced taxpayer station must exist where required.
+- [ ] No taxpayer/station ACTIVE/INACTIVE assumption was added.
 - [ ] `UPDATED_AT` is changed appropriately for source updates.
 
 ## Error handling / resilience
@@ -50,7 +62,7 @@ If this PR touches source-system behavior:
 - [ ] Stack traces, credentials, SQL, and connection strings are not returned to clients.
 - [ ] Oracle write failures do not report false success.
 - [ ] Oracle transactions rollback on failed writes.
-- [ ] ClickHouse failure does not unnecessarily break Oracle CRUD.
+- [ ] ClickHouse failure does not unnecessarily break Oracle source operations.
 - [ ] Debezium/Kafka degradation does not unnecessarily break the source application.
 
 ## Security / repository hygiene
@@ -72,9 +84,10 @@ If this PR touches the web application:
 - [ ] No login/auth flow was added unless explicitly approved.
 - [ ] Business pages avoid CDC/Kafka/Debezium jargon.
 - [ ] Create/Edit actions use the consistent drawer pattern where appropriate.
-- [ ] Dangerous actions use confirmation dialogs.
+- [ ] Dangerous actions use confirmation dialogs where applicable.
 - [ ] Success/error feedback uses the shared toast/modal patterns.
 - [ ] Navigation preserves the lightweight SPA-style behavior.
+- [ ] Taxpayer/station status badges are not invented when the source model has no such field.
 
 ## Testing
 
