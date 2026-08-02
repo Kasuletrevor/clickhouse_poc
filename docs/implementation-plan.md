@@ -6,6 +6,27 @@ Build the approved FastAPI + HTML/CSS/vanilla JavaScript internal transactional 
 
 Do not rebuild the CDC stack. Build vertically and verify each slice end-to-end.
 
+## Current schema freeze
+
+For the current application phase, do **not** alter the source schema of `CDC_APP.TAXPAYER` or `CDC_APP.STATION` to add lifecycle/status fields.
+
+Specifically, do not add:
+
+```text
+TAXPAYER.STATUS
+STATION.STATUS
+```
+
+The first web-app milestones must work with the already-proven Oracle schema.
+
+Therefore:
+
+- taxpayer deactivate/reactivate is deferred;
+- station deactivate/reactivate is deferred;
+- no API route should require those fields;
+- Payments validation checks existence of the taxpayer and its referenced station, not ACTIVE/INACTIVE state;
+- schema changes affecting Debezium compatibility are out of scope unless separately approved.
+
 ---
 
 ## Phase 0 — Repository inspection and safety
@@ -19,8 +40,9 @@ Before writing application code:
 5. Confirm current Docker service names and ports.
 6. Confirm existing ClickHouse objects and current Oracle schema.
 7. Read `docs/cdc_internal_transaction_app_design_spec.md` completely.
+8. Treat the current TAXPAYER/STATION schema as frozen for this phase.
 
-Output of this phase should be a short implementation note describing any differences between repository reality and the design document.
+Output should be a short implementation note describing differences between repository reality and the design document.
 
 ---
 
@@ -86,7 +108,7 @@ POST /api/payments
 POST /api/payments/{id}/status
 ```
 
-Use Oracle only.
+Use Oracle only for operational reads/writes.
 
 Business state rules:
 
@@ -99,12 +121,14 @@ REVERSED → terminal
 
 Validate:
 
-- positive amount
-- taxpayer exists
-- taxpayer is active
-- station exists/active
-- payment ID unique
-- valid status transition
+- amount > 0;
+- taxpayer exists;
+- referenced station exists for that taxpayer;
+- payment ID is unique;
+- requested payment status is allowed;
+- requested status transition is valid.
+
+Do **not** validate `taxpayer ACTIVE` or `station ACTIVE`; those columns do not exist in the current source model and must not be introduced for this phase.
 
 Translate Oracle errors to safe API errors.
 
@@ -138,27 +162,35 @@ The app must not call Kafka or ClickHouse during the source write.
 
 ## Phase 3 — Taxpayers
 
-Implement:
+Implement for the current schema:
 
 ```text
-GET    /api/taxpayers
-GET    /api/taxpayers/{tin}
-POST   /api/taxpayers
-PUT    /api/taxpayers/{tin}
-POST   /api/taxpayers/{tin}/deactivate
-POST   /api/taxpayers/{tin}/activate
+GET  /api/taxpayers
+GET  /api/taxpayers/{tin}
+POST /api/taxpayers
+PUT  /api/taxpayers/{tin}
 ```
 
 Features:
 
-- list/search/filter
-- create
-- edit
-- station reassignment
-- deactivate/reactivate
-- friendly validation
+- list/search/filter by existing fields;
+- create;
+- edit;
+- station reassignment;
+- friendly validation.
 
-Source changes must update `UPDATED_AT`.
+Source changes must update `UPDATED_AT` where appropriate.
+
+### Deferred
+
+Do not implement in this phase:
+
+```text
+POST /api/taxpayers/{tin}/deactivate
+POST /api/taxpayers/{tin}/activate
+```
+
+These require an explicit future lifecycle design/schema decision.
 
 ### Acceptance
 
@@ -168,22 +200,28 @@ Move a taxpayer to a different station through the app and verify downstream Cli
 
 ## Phase 4 — Stations
 
-Implement:
+Implement for the current schema:
 
 ```text
-GET    /api/stations
-GET    /api/stations/{id}
-POST   /api/stations
-PUT    /api/stations/{id}
-POST   /api/stations/{id}/deactivate
-POST   /api/stations/{id}/activate
+GET  /api/stations
+GET  /api/stations/{id}
+POST /api/stations
+PUT  /api/stations/{id}
 ```
 
-Before deactivation, count active taxpayers assigned to the station.
+Features:
 
-Return a friendly `409` if the station is still in use.
+- list/search/filter by existing fields;
+- create;
+- edit;
+- region/district fields;
+- friendly validation.
 
-Do not expose raw FK errors.
+### Deferred
+
+Do not implement station deactivate/reactivate in this phase and do not add `STATION.STATUS` to support it.
+
+Normal hard deletion is also not required for the POC UI.
 
 ---
 
@@ -204,10 +242,12 @@ Suggested KPIs:
 
 ```text
 Total Taxpayers
-Active Stations
+Total Stations
 Payments Today
 Amount Collected Today
 ```
+
+Do not display an `Active Stations` metric unless a real source-system lifecycle field is introduced in a separately approved phase.
 
 Keep CDC terminology out of this page.
 
@@ -354,10 +394,11 @@ SUCCESSFUL → REVERSED allowed
 REVERSED → SUCCESSFUL rejected
 negative payment rejected
 zero payment rejected
-inactive taxpayer rejected
-inactive station rejected
-station in use cannot deactivate
+missing taxpayer rejected
+missing station/reference rejected
 ```
+
+Do not add tests that assume taxpayer/station ACTIVE/INACTIVE columns in this phase.
 
 ### API tests
 
@@ -394,8 +435,6 @@ main
 
 Prefer logically scoped commits.
 
-If practical, review the major vertical slices separately rather than delivering one enormous unreviewable change.
-
 Each PR/review should verify:
 
 ```text
@@ -403,6 +442,8 @@ Each PR/review should verify:
 [ ] no app write to Kafka
 [ ] no app write to ClickHouse
 [ ] source writes commit transactionally
+[ ] current Oracle schema is respected
+[ ] no unapproved TAXPAYER/STATION status fields were introduced
 [ ] business rules enforced server-side
 [ ] secrets absent
 [ ] errors translated safely
@@ -415,4 +456,4 @@ Each PR/review should verify:
 
 ## Definition of done
 
-The POC application is complete when a user can create/update source transactions in the web app, observe them first in Oracle and subsequently through the CDC pipeline into ClickHouse/Power BI, while historical station-at-payment semantics remain correct and analytical subsystem failures do not prevent normal Oracle CRUD.
+The POC application is complete when a user can create/update source transactions in the web app, observe them first in Oracle and subsequently through the CDC pipeline into ClickHouse/Power BI, while historical station-at-payment semantics remain correct and analytical subsystem failures do not prevent normal Oracle source operations.
