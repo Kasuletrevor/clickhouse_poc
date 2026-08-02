@@ -53,9 +53,13 @@ Use:
 
 The activity feed must represent actual change events rather than merely sorting the latest taxpayer dimension rows.
 
+Because the flattened ClickHouse CDC table represents successive row versions rather than a native Debezium before/after envelope, friendly before/after descriptions must be derived by comparing consecutive source-ordered versions for the same taxpayer. A station reassignment is detected when the current event's `station_id` differs from the previous source-ordered version's `station_id`.
+
 Source-derived ordering must be used for event chronology. `ingested_at` is observability metadata and must not become authoritative ordering where source commit metadata is available.
 
 ## 4. KPI definitions
+
+The business-day boundary for Dashboard "today" metrics is **Africa/Kampala (EAT, UTC+3)**. Queries must not depend implicitly on the host/container timezone.
 
 ### Total Taxpayers
 
@@ -69,11 +73,11 @@ Do not label this as "Active Stations" because the source schema does not contai
 
 ### Payments Today
 
-Count current payment records whose business `payment_time` falls on the current calendar date used by the analytical environment.
+Count current payment records whose business `payment_time` falls within the current Africa/Kampala calendar date.
 
 ### Amount Collected Today
 
-Sum payment `amount` for payments occurring today that are currently `SUCCESSFUL`.
+Sum payment `amount` for payments occurring within the current Africa/Kampala calendar date that are currently `SUCCESSFUL`.
 
 This KPI represents collected revenue, so pending and reversed payments must not contribute to the collected amount.
 
@@ -103,9 +107,10 @@ Two prominent chart panels below the KPI row.
 Use a bar chart because relative magnitude and ranking matter.
 
 - business station names on the category axis
-- payment amount as the primary measure
+- successful payment amount as the primary bar measure
+- payment count available as supporting text/tooltip data
 - show exact/compact values in tooltips or labels
-- order stations by amount descending where practical
+- order stations by successful amount descending where practical
 - avoid rainbow coloring; use a restrained palette consistent with the navy/gold application design
 
 #### Payment Status Breakdown
@@ -122,7 +127,7 @@ Use semantic status colors consistent with the rest of the app:
 - pending: amber/gold
 - reversed: red
 
-Show counts and/or percentages clearly enough that the chart does not rely on color alone.
+Show counts and percentages clearly enough that the chart does not rely on color alone.
 
 ## 6. Lower dashboard panels
 
@@ -141,7 +146,7 @@ This section is analytical and reads ClickHouse, not Oracle.
 
 ### Recent Taxpayer Activity
 
-Translate raw taxpayer CDC rows into business-facing activity descriptions.
+Translate raw taxpayer CDC row versions into business-facing activity descriptions.
 
 Supported friendly activities include:
 
@@ -153,7 +158,7 @@ A station-change item should present a friendly before/after value such as:
 
 `Kampala Central → Jinja`
 
-Where station names cannot be resolved, fall back to station IDs rather than dropping the event.
+Station-change before/after values are derived from consecutive source-ordered taxpayer versions. Resolve station names from ClickHouse station data where possible; if a name cannot be resolved, fall back to the station ID rather than dropping the event.
 
 Do not show source SCN, commit SCN, transaction ID, Kafka topic/partition/offset, or ClickHouse ingestion time on the normal Dashboard. Those details belong to the later Event Monitor screen.
 
@@ -201,13 +206,15 @@ Taxpayer activity items contain a friendly action label/message plus enough stru
 
 Add a dedicated ClickHouse access layer rather than putting HTTP/SQL calls directly into route handlers.
 
-Suggested responsibility split:
+Responsibility split:
 
-- `app/clickhouse.py` — connection/client handling and safe ClickHouse exceptions
+- `app/clickhouse.py` — ClickHouse HTTP client handling, configuration and safe ClickHouse exceptions
 - `app/repositories/dashboard.py` — analytical SQL only
 - `app/services/dashboard.py` — response shaping and friendly activity translation
 - `app/routes/dashboard.py` — HTTP concerns
-- `app/static/js/dashboard.js` — rendering, polling, chart behavior
+- `app/static/js/dashboard.js` — rendering, polling and chart behavior
+
+Use ClickHouse's HTTP interface on the existing service endpoint rather than introducing a new native-driver dependency for this slice.
 
 The Dashboard must not reuse the Oracle repository layer for analytical reads.
 
@@ -246,12 +253,19 @@ Stay within the approved frontend stack:
 
 Do not introduce React, Vue, Angular, Vite or npm.
 
-For charts, prefer a lightweight browser chart library only if it materially reduces complexity and can be served locally without introducing a frontend build toolchain. If the project already has no chart dependency, an implementation plan must explicitly choose either:
+Charts will be rendered with **native SVG generated by `dashboard.js`**. This avoids external CDN/proxy dependency, avoids a frontend build toolchain, and gives direct control over the approved visual identity.
 
-1. a small vendored/browser-loaded chart library with no build step, or
-2. simple native SVG/canvas chart rendering in `dashboard.js`.
+Implementation requirements:
 
-The implementation must preserve the application’s navy/gold visual identity and semantic payment-state colors.
+- SVG bar chart for Payments by Station
+- SVG donut chart for Payment Status Breakdown
+- responsive redraw/re-render based on container width
+- accessible text labels/legends alongside charts
+- restrained navy/gold chart treatment
+- semantic green/amber/red status colors
+- compact UGX formatting in visible values/tooltips
+
+No third-party chart dependency is required for this slice.
 
 ## 12. Testing
 
@@ -259,9 +273,11 @@ Add automated tests for:
 
 - dashboard summary response shape
 - successful amount excludes PENDING and REVERSED payments
+- Africa/Kampala day-boundary behavior
 - station aggregation response shape/order
 - payment status summary
 - taxpayer CDC activity translation for create/update/station reassignment
+- source-ordered version comparison for station reassignment
 - ClickHouse failure mapped to a safe analytics-unavailable response
 - app shell routes Dashboard navigation to the real Dashboard page rather than the placeholder
 
@@ -286,10 +302,10 @@ This slice does not implement:
 The Dashboard is ready when:
 
 1. all automated tests pass on the RHEL Python 3.9 environment;
-2. all four KPIs return live ClickHouse values;
-3. Payments by Station and Payment Status Breakdown render clearly and prominently;
+2. all four KPIs return live ClickHouse values using the Africa/Kampala business-day boundary;
+3. Payments by Station and Payment Status Breakdown render clearly and prominently using native SVG;
 4. Recent Payments comes from ClickHouse;
-5. Recent Taxpayer Activity is based on raw taxpayer CDC history and shows friendly business descriptions;
+5. Recent Taxpayer Activity is based on raw taxpayer CDC history and shows friendly business descriptions derived from source-ordered versions;
 6. the Dashboard refreshes automatically without page reload;
 7. ClickHouse failure does not break the Oracle-backed operational screens;
 8. no CDC jargon appears in normal Dashboard presentation text.
