@@ -1,4 +1,5 @@
 import { PaymentsPage } from "./payments.js";
+import { TaxpayersPage } from "./taxpayers.js";
 
 const shell = {
   content: document.querySelector("#app-content"),
@@ -13,9 +14,12 @@ shell.backdrop.onclick = () => shell.closeDrawer();
 
 const titles={dashboard:"Dashboard",taxpayers:"Taxpayers",stations:"Stations",payments:"Payments",reports:"Reports",pipeline:"Pipeline Health",events:"Event Monitor",simulator:"Simulator"};
 async function navigate(page){
-  document.querySelectorAll(".nav-item").forEach(b=>b.classList.toggle("active",b.dataset.page===page)); shell.title.textContent=titles[page]||"Tax Operations";
+  document.querySelectorAll(".nav-item").forEach(b=>b.classList.toggle("active",b.dataset.page===page));
+  shell.title.textContent=titles[page]||"Tax Operations";
+  shell.closeDrawer();
   if(page==="payments") return new PaymentsPage(shell).render();
-  shell.content.innerHTML=`<div class="placeholder"><p class="eyebrow">Planned module</p><h2>${titles[page]}</h2><p>This module is part of the approved implementation plan and will be added after the Payments vertical slice.</p></div>`;
+  if(page==="taxpayers") return new TaxpayersPage(shell).render();
+  shell.content.innerHTML=`<div class="placeholder"><p class="eyebrow">Planned module</p><h2>${titles[page]}</h2><p>This module is part of the approved implementation plan and will be added in the next vertical slices.</p></div>`;
 }
 document.querySelectorAll(".nav-item").forEach(btn=>btn.onclick=()=>navigate(btn.dataset.page));
 navigate("payments");
