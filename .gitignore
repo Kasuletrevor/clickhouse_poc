@@ -216,3 +216,36 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ============================================================
+# CDC ClickHouse POC - runtime data and secrets
+# ============================================================
+
+# Secrets / environment
+.env
+.env.*
+!.env.example
+
+# Persistent database/broker data
+oracle/oradata/
+kafka/data/
+clickhouse/data/
+clickhouse/logs/
+
+# Runtime logs
+*.log
+fastapi.log
+simulator/load.log
+
+# PID/runtime files
+*.pid
+
+# Debezium connector configs currently contain credentials
+debezium/oracle-cdc.json
+debezium/oracle-cdc-flat.json
+
+# Python environments/cache
+.venv/
+venv/
+__pycache__/
+*.pyc
