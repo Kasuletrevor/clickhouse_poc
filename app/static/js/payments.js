@@ -3,9 +3,18 @@ import { api } from "./api.js";
 const money = new Intl.NumberFormat("en-UG", {style:"currency", currency:"UGX", maximumFractionDigits:0});
 const when = (value) => value ? new Date(value).toLocaleString() : "—";
 const statusBadge = (status) => `<span class="badge badge-${status.toLowerCase()}">${status}</span>`;
+const escapeHtml = (value) => String(value ?? "")
+  .replaceAll("&", "&amp;")
+  .replaceAll("<", "&lt;")
+  .replaceAll(">", "&gt;")
+  .replaceAll('"', "&quot;")
+  .replaceAll("'", "&#039;");
 
 export class PaymentsPage {
-  constructor(shell) { this.shell = shell; }
+  constructor(shell) {
+    this.shell = shell;
+    this.taxpayers = [];
+  }
 
   async render() {
     this.shell.content.innerHTML = `
@@ -48,12 +57,35 @@ export class PaymentsPage {
       <div class="kpi-card"><span>REVERSED</span><strong>${s.reversed}</strong><small>Reversed transactions</small></div>`;
   }
 
-  openCreate() {
+  async loadTaxpayers() {
+    const data = await api("/api/taxpayers?limit=200");
+    this.taxpayers = data.items || [];
+  }
+
+  taxpayerOptions() {
+    return this.taxpayers.map(taxpayer => `
+      <option value="${escapeHtml(taxpayer.taxpayer_id)}">${escapeHtml(taxpayer.taxpayer_name)} — ${escapeHtml(taxpayer.taxpayer_id)}</option>`).join("");
+  }
+
+  async openCreate() {
+    try {
+      await this.loadTaxpayers();
+    } catch (error) {
+      this.taxpayers = [];
+      this.shell.toast(`Taxpayers could not be loaded: ${error.message}`, true);
+      return;
+    }
+
+    if (!this.taxpayers.length) {
+      this.shell.toast("No taxpayers are available for payment creation.", true);
+      return;
+    }
+
     this.shell.openDrawer(`
       <div class="drawer-head"><div><p class="eyebrow">New transaction</p><h3>Create Payment</h3></div><button class="close-btn" data-close>×</button></div>
       <form id="payment-form">
         <div class="field"><label>Payment ID <span class="muted">(optional)</span></label><input class="input" name="payment_id" maxlength="20" placeholder="Generated automatically if blank"></div>
-        <div class="field"><label>Taxpayer TIN</label><input class="input" name="taxpayer_id" maxlength="20" required placeholder="TIN001"></div>
+        <div class="field"><label>Taxpayer</label><select class="select" name="taxpayer_id" required><option value="">Select taxpayer</option>${this.taxpayerOptions()}</select></div>
         <div class="field"><label>Amount (UGX)</label><input class="input" name="amount" type="number" min="1" step="0.01" required placeholder="810000"></div>
         <div class="field"><label>Status</label><select class="select" name="status"><option>PENDING</option><option>SUCCESSFUL</option><option>REVERSED</option></select></div>
         <div class="form-actions"><button type="button" class="btn" data-close>Cancel</button><button class="btn btn-primary" type="submit">Create Payment</button></div>
