@@ -122,6 +122,7 @@ class DashboardRepository:
                     ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
                 )
             )
+            WHERE dbz_op IN ('c', 'u')
             ORDER BY source_commit_scn DESC, source_scn DESC, source_ssn DESC,
                      kafka_partition DESC, kafka_offset DESC
             LIMIT {limit}
