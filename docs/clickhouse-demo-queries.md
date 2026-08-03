@@ -57,8 +57,6 @@ dim_oracle_taxpayer_history
 vw_oracle_payment_analytics
 ```
 
-Suggested explanation:
-
 > The `raw_*` tables retain CDC history, the `*_current` tables reconstruct current state, the history table preserves changing taxpayer context, and the serving view exposes business-ready analytics.
 
 ---
@@ -113,8 +111,6 @@ or:
 SHOW CREATE TABLE analytics.dim_oracle_taxpayer_current;
 ```
 
-Suggested explanation:
-
 > `SHOW CREATE TABLE` lets us inspect the exact transformation logic ClickHouse is using. This is especially useful for proving how raw CDC events are turned into current-state tables, history tables and the final business-serving view.
 
 ---
@@ -133,8 +129,6 @@ FROM analytics.fact_oracle_payment_current
 ORDER BY payment_time DESC
 LIMIT 20;
 ```
-
-Suggested explanation:
 
 > These are not raw Kafka events. ClickHouse has reconstructed the latest state of each payment.
 
@@ -163,8 +157,6 @@ This is one of the strongest demo queries because it exposes both:
 station_at_payment
 current_station
 ```
-
-Suggested explanation:
 
 > A payment keeps the station that was valid when it occurred, while the same result can also show the taxpayer's current station.
 
@@ -197,8 +189,6 @@ Typical Debezium operation values include:
 c = create
 u = update
 ```
-
-Suggested explanation:
 
 > This is below the business layer. These are the change events that travelled Oracle → Debezium → Kafka → ClickHouse.
 
@@ -239,8 +229,6 @@ SELECT *
 FROM analytics.fact_oracle_payment_current
 WHERE payment_id = 'PAY101';
 ```
-
-Suggested explanation:
 
 > Raw history keeps every version; the current-state table resolves the latest valid state.
 
@@ -315,8 +303,6 @@ PAY102   ...   Kampala Central   Jinja
 PAY103   ...   Jinja             Jinja
 ```
 
-Suggested explanation:
-
 > PAY102 happened while the taxpayer belonged to Kampala Central, so its historical station remains Kampala Central even though the taxpayer later moved to Jinja. PAY103 happened after the move, so both values are Jinja.
 
 This demonstrates why the model is more than a simple latest-row join.
@@ -368,8 +354,6 @@ WHERE toDate(payment_time, 'Africa/Kampala')
       = toDate(now('Africa/Kampala'));
 ```
 
-Suggested explanation:
-
 > Payments Today counts today's transactions, while Amount Collected Today includes only payments whose current status is SUCCESSFUL.
 
 ---
@@ -389,8 +373,6 @@ GROUP BY
     kafka_partition
 ORDER BY kafka_partition;
 ```
-
-Suggested explanation:
 
 > These Kafka topic, partition and offset values prove that the analytical records arrived through the Kafka CDC stream rather than through an application-side Oracle-to-ClickHouse copy.
 
@@ -446,8 +428,6 @@ WHERE source_commit_time IS NOT NULL
 ORDER BY ingested_at DESC
 LIMIT 20;
 ```
-
-Suggested explanation:
 
 > This gives an approximate commit-to-ClickHouse propagation time for recent CDC events.
 
