@@ -63,6 +63,62 @@ Suggested explanation:
 
 ---
 
+## 1A. Inspect a view definition
+
+The quickest way to read the full SQL definition of a ClickHouse view is:
+
+```sql
+SHOW CREATE TABLE analytics.vw_oracle_payment_analytics;
+```
+
+ClickHouse uses `SHOW CREATE TABLE` for tables and views, so the same command works even though `vw_oracle_payment_analytics` is a view.
+
+This is useful during a demo because it shows exactly how the serving layer is built from the underlying fact and dimension objects.
+
+You can also read the definition from ClickHouse metadata:
+
+```sql
+SELECT
+    database,
+    name,
+    engine,
+    create_table_query
+FROM system.tables
+WHERE database = 'analytics'
+  AND name = 'vw_oracle_payment_analytics';
+```
+
+To list the definitions of all views in the `analytics` database:
+
+```sql
+SELECT
+    name,
+    engine,
+    create_table_query
+FROM system.tables
+WHERE database = 'analytics'
+  AND engine IN ('View', 'MaterializedView')
+ORDER BY name;
+```
+
+For any specific current-state or materialized object, replace the name, for example:
+
+```sql
+SHOW CREATE TABLE analytics.fact_oracle_payment_current;
+```
+
+or:
+
+```sql
+SHOW CREATE TABLE analytics.dim_oracle_taxpayer_current;
+```
+
+Suggested explanation:
+
+> `SHOW CREATE TABLE` lets us inspect the exact transformation logic ClickHouse is using. This is especially useful for proving how raw CDC events are turned into current-state tables, history tables and the final business-serving view.
+
+---
+
 ## 2. Show current payments
 
 ```sql
