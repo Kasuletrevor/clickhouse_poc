@@ -1,3 +1,4 @@
+import { DashboardPage } from "./dashboard.js";
 import { PaymentsPage } from "./payments.js";
 import { StationsPage } from "./stations.js";
 import { TaxpayersPage } from "./taxpayers.js";
@@ -14,14 +15,19 @@ const shell = {
 shell.backdrop.onclick = () => shell.closeDrawer();
 
 const titles={dashboard:"Dashboard",taxpayers:"Taxpayers",stations:"Stations",payments:"Payments",reports:"Reports",pipeline:"Pipeline Health",events:"Event Monitor",simulator:"Simulator"};
+let activePage = null;
+
 async function navigate(page){
+  if(activePage && typeof activePage.destroy === "function") activePage.destroy();
+  activePage = null;
   document.querySelectorAll(".nav-item").forEach(b=>b.classList.toggle("active",b.dataset.page===page));
   shell.title.textContent=titles[page]||"Tax Operations";
   shell.closeDrawer();
-  if(page==="payments") return new PaymentsPage(shell).render();
-  if(page==="taxpayers") return new TaxpayersPage(shell).render();
-  if(page==="stations") return new StationsPage(shell).render();
+  if(page==="dashboard") { activePage = new DashboardPage(shell); await activePage.render(); return; }
+  if(page==="payments") { activePage = new PaymentsPage(shell); await activePage.render(); return; }
+  if(page==="taxpayers") { activePage = new TaxpayersPage(shell); await activePage.render(); return; }
+  if(page==="stations") { activePage = new StationsPage(shell); await activePage.render(); return; }
   shell.content.innerHTML=`<div class="placeholder"><p class="eyebrow">Planned module</p><h2>${titles[page]}</h2><p>This module is part of the approved implementation plan and will be added in the next vertical slices.</p></div>`;
 }
 document.querySelectorAll(".nav-item").forEach(btn=>btn.onclick=()=>navigate(btn.dataset.page));
-navigate("payments");
+navigate("dashboard");
