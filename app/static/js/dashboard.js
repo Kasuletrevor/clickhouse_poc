@@ -22,6 +22,9 @@ export class DashboardPage {
 
   async render() {
     this.destroyed = false;
+    this.hasRenderedData = false;
+    if (this.timer) window.clearInterval(this.timer);
+    this.timer = null;
     this.shell.content.innerHTML = `
       <div class="dashboard-head">
         <div>
@@ -59,7 +62,9 @@ export class DashboardPage {
       </div>`;
 
     await this.refresh(true);
-    if (!this.destroyed) this.timer = window.setInterval(() => this.refresh(false), 10000);
+    if (!this.destroyed && this.hasRenderedData) {
+      this.timer = window.setInterval(() => this.refresh(false), 10000);
+    }
     return this;
   }
 
@@ -102,6 +107,8 @@ export class DashboardPage {
   }
 
   renderUnavailable(message) {
+    if (this.timer) window.clearInterval(this.timer);
+    this.timer = null;
     this.shell.content.innerHTML = `
       <div class="analytics-unavailable">
         <div class="analytics-unavailable-icon">!</div>
