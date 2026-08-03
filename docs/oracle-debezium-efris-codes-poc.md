@@ -18,6 +18,8 @@ The table owner/schema will be confirmed with the Oracle DBA before the connecto
 
 The scope of this document is deliberately limited to **Oracle and Debezium**. Kafka, ClickHouse, Power BI, and the application layer are outside this DBA setup request.
 
+An existing Oracle connection/user is already available and will be reused for the POC. **No new Oracle account is requested.**
+
 ---
 
 ## What the POC will prove
@@ -30,27 +32,9 @@ The source of truth remains Oracle. Debezium does not write to `Efris_codes`; it
 
 ## What we need from the Oracle DBA
 
-### 1. Oracle connection information
+## 1. Confirm the Oracle database topology
 
-Please provide or confirm:
-
-```text
-Oracle hostname / IP
-Listener port
-Service name
-PDB name, if applicable
-Schema/owner of Efris_codes
-Oracle database version
-Whether the database is CDB/PDB
-Whether the environment uses RAC
-Whether ASM is used for redo/archive logs
-```
-
-No SYS or SYSTEM credentials are required by the Debezium application.
-
----
-
-## 2. Confirm the Oracle database topology
+The Oracle connection details are already available. The DBA only needs to confirm the database characteristics required for the Debezium LogMiner configuration.
 
 Please run:
 
@@ -79,11 +63,19 @@ SELECT name, open_mode
 FROM v$pdbs;
 ```
 
-The Debezium user and connector configuration will be adjusted to match the actual CDB/PDB topology.
+Please also confirm whether the environment uses:
+
+```text
+CDB/PDB
+RAC
+ASM for redo/archive logs
+```
+
+The Debezium connector configuration will be adjusted to match the actual Oracle topology.
 
 ---
 
-## 3. Confirm `Efris_codes`
+## 2. Confirm `Efris_codes`
 
 The DBA should confirm the owner and table metadata:
 
@@ -136,7 +128,7 @@ A stable primary key is strongly preferred for CDC because it gives Debezium an 
 
 ---
 
-## 4. ARCHIVELOG requirement
+## 3. ARCHIVELOG requirement
 
 Debezium LogMiner needs Oracle redo information and normally relies on online redo plus archived redo logs.
 
@@ -159,7 +151,7 @@ The existing archive-log retention/deletion policy should also be reviewed. The 
 
 ---
 
-## 5. Enable minimal supplemental logging
+## 4. Enable minimal supplemental logging
 
 Confirm the current setting:
 
@@ -189,7 +181,7 @@ YES
 
 ---
 
-## 6. Enable supplemental logging only for `Efris_codes`
+## 5. Enable supplemental logging only for `Efris_codes`
 
 For this POC, do **not** enable ALL COLUMN supplemental logging across the entire test database.
 
@@ -218,50 +210,39 @@ This keeps the POC narrow and limits additional redo generation to the table bei
 
 ---
 
-## 7. Create a dedicated Debezium LogMiner user
+## 6. Confirm required privileges on the existing Oracle connection
 
-Use a dedicated account for CDC, for example:
+The existing Oracle connection/user will be used by Debezium. No new account needs to be created.
+
+The DBA should confirm that this existing user has the minimum privileges required by Debezium Oracle LogMiner. Typical LogMiner-related privileges include:
 
 ```text
-CDC_DEBEZIUM
+CREATE SESSION
+LOGMINING
+SELECT ANY TRANSACTION
+SELECT_CATALOG_ROLE
+EXECUTE_CATALOG_ROLE
 ```
 
-The exact user creation location depends on whether the Oracle environment is non-CDB or multitenant. The DBA should create the account in the correct container and apply the minimum privileges required by Debezium Oracle LogMiner.
+Debezium also needs access to the Oracle dictionary and dynamic performance views used to discover redo logs, transactions, SCNs, database metadata, and LogMiner state.
 
-Typical LogMiner-related privileges include:
-
-```sql
-GRANT CREATE SESSION TO CDC_DEBEZIUM;
-GRANT LOGMINING TO CDC_DEBEZIUM;
-GRANT SELECT ANY TRANSACTION TO CDC_DEBEZIUM;
-GRANT SELECT_CATALOG_ROLE TO CDC_DEBEZIUM;
-GRANT EXECUTE_CATALOG_ROLE TO CDC_DEBEZIUM;
-```
-
-Debezium also requires read access to Oracle dictionary and dynamic performance views used to discover redo logs, transactions, SCNs, database metadata, and LogMiner state. The exact grants should be aligned with the Oracle version and local security policy rather than granting DBA privileges.
-
-No DBA role should be granted to `CDC_DEBEZIUM`.
+The exact grants should be aligned with the Oracle version, topology, and local security policy. **DBA privileges are not required.**
 
 ---
 
-## 8. Grant snapshot/read access only to the POC table
+## 7. Confirm read/snapshot access to `Efris_codes`
 
-For the initial Debezium snapshot, prefer table-specific permissions instead of broad `SELECT ANY TABLE` / `FLASHBACK ANY TABLE` where the local security policy permits it.
+For the initial Debezium snapshot, the existing Oracle user must be able to read `Efris_codes` and, where required by the connector setup, perform the necessary flashback read.
 
-Example:
+The DBA should confirm that the existing account already has the necessary access or add only the missing table-specific privileges.
 
-```sql
-GRANT SELECT ON <SCHEMA>.Efris_codes TO CDC_DEBEZIUM;
-GRANT FLASHBACK ON <SCHEMA>.Efris_codes TO CDC_DEBEZIUM;
-```
-
-If the Oracle version/topology requires broader grants for the connector, the DBA should approve those explicitly.
+The preferred scope is the single POC table rather than broad database-wide table access.
 
 ---
 
-## 9. Network connectivity
+## 8. Network connectivity
 
-The Debezium/Kafka Connect host must be able to reach the Oracle test listener.
+The Debezium/Kafka Connect host must be able to reach the Oracle test listener using the existing Oracle connection details.
 
 Required path:
 
@@ -278,7 +259,7 @@ A simple connectivity check from the Debezium host should be performed before co
 
 ---
 
-## 10. Debezium connector scope
+## 9. Debezium connector scope
 
 The connector must initially include only `Efris_codes`.
 
@@ -292,23 +273,21 @@ Conceptually:
 }
 ```
 
-The full connector JSON will be prepared after the DBA confirms:
+The full connector JSON will be prepared after confirming:
 
 ```text
 Oracle version
-hostname
-listener port
-service/PDB
+service/PDB topology
 schema owner
-CDC username
 primary-key structure of Efris_codes
+required privileges on the existing Oracle connection
 ```
 
-Credentials will not be committed to GitHub.
+The existing Oracle connection credentials will be supplied to the connector securely and will **not** be committed to GitHub.
 
 ---
 
-## 11. Validation procedure
+## 10. Validation procedure
 
 After Oracle and Debezium are configured, use a controlled test row in `Efris_codes`.
 
@@ -332,7 +311,7 @@ The business table must not be modified merely to generate traffic unless the DB
 
 ---
 
-## 12. Oracle-side acceptance checks
+## 11. Oracle-side acceptance checks
 
 Before registering the Debezium connector, confirm all of the following:
 
@@ -343,9 +322,8 @@ Before registering the Debezium connector, confirm all of the following:
 - [ ] Database is in `ARCHIVELOG` mode.
 - [ ] Minimal supplemental logging is enabled.
 - [ ] `ALL COLUMNS` supplemental logging is enabled only on `<SCHEMA>.Efris_codes` for this POC.
-- [ ] Dedicated `CDC_DEBEZIUM` account exists.
-- [ ] The account has the approved LogMiner/catalog/V$ privileges.
-- [ ] The account can SELECT/FLASHBACK the POC table for snapshotting.
+- [ ] The existing Oracle connection has the required LogMiner/catalog/V$ privileges.
+- [ ] The existing Oracle connection can read/snapshot `Efris_codes`.
 - [ ] The Debezium host can reach the Oracle listener.
 - [ ] Archive-log retention is sufficient for temporary connector downtime.
 
@@ -356,10 +334,11 @@ Before registering the Debezium connector, confirm all of the following:
 For this Oracle/Debezium POC, the DBA is **not** being asked to:
 
 ```text
+Create a new Oracle account
 Install Debezium on the Oracle server
 Install Kafka on the Oracle server
-Provide SYS/SYSTEM credentials to the connector
-Grant DBA to the Debezium user
+Provide SYS/SYSTEM credentials
+Grant DBA privileges to the existing Oracle connection
 Enable ALL COLUMN supplemental logging for every database table
 Modify production
 Create database links
@@ -377,9 +356,8 @@ The immediate DBA request is therefore:
 2. Confirm the owner/schema and key structure of `Efris_codes`.
 3. Confirm/enable `ARCHIVELOG` and minimal supplemental logging.
 4. Add table-level ALL COLUMN supplemental logging only to `Efris_codes`.
-5. Create a dedicated least-privilege Debezium LogMiner account.
-6. Grant snapshot access to `Efris_codes` and the required LogMiner/catalog/V$ access.
+5. Confirm the existing Oracle connection has the LogMiner/catalog/V$ privileges required by Debezium.
+6. Confirm that the existing connection can read/snapshot `Efris_codes`.
 7. Confirm network connectivity and archive-log retention.
-8. Return the connection metadata required for connector configuration.
 
-Once these are confirmed, the Debezium connector can be registered with `table.include.list` restricted to `<SCHEMA>.EFRIS_CODES` and the end-to-end CDC test can begin.
+Once these are confirmed, the Debezium connector can be registered with `table.include.list` restricted to `<SCHEMA>.EFRIS_CODES` and the CDC test can begin.
