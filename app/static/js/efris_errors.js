@@ -4,7 +4,7 @@ const number = new Intl.NumberFormat("en-UG", {maximumFractionDigits: 0});
 const compact = new Intl.NumberFormat("en-UG", {notation: "compact", maximumFractionDigits: 2});
 const money = new Intl.NumberFormat("en-UG", {style: "currency", currency: "UGX", maximumFractionDigits: 0});
 const when = (value) => value ? new Date(value).toLocaleString("en-UG", {dateStyle:"medium", timeStyle:"short"}) : "—";
-const escapeHtml = (value) => String(value ?? "").replace(/[&<>'\"]/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'\"':"&quot;"}[ch]));
+const escapeHtml = (value) => String(value ?? "").replace(/[&<>'"]/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[ch]));
 
 export class EfrisErrorsPage {
   constructor(shell) {
@@ -28,8 +28,8 @@ export class EfrisErrorsPage {
           <h2>EFRIS Error Monitor</h2>
           <p>Live invoice-error activity captured from Oracle and served from ClickHouse.</p>
         </div>
-        <div class="efris-head-actions">
-          <select id="efris-range" class="select efris-range" aria-label="EFRIS time range">
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:flex-end">
+          <select id="efris-range" class="select" style="width:auto;min-width:160px" aria-label="EFRIS time range">
             <option value="15">Last 15 minutes</option>
             <option value="60" selected>Last 1 hour</option>
             <option value="1440">Last 24 hours</option>
@@ -38,7 +38,7 @@ export class EfrisErrorsPage {
           <div class="dashboard-refresh"><span class="environment-dot"></span><span>Last refreshed <strong id="efris-refreshed">Loading…</strong></span></div>
         </div>
       </div>
-      <div id="efris-kpis" class="efris-kpi-grid">
+      <div id="efris-kpis" class="dashboard-kpi-grid">
         ${this.kpiSkeleton("Error Events")}
         ${this.kpiSkeleton("Affected Invoices")}
         ${this.kpiSkeleton("Taxpayers")}
@@ -46,7 +46,7 @@ export class EfrisErrorsPage {
         ${this.kpiSkeleton("UGX Gross Amount")}
         ${this.kpiSkeleton("UGX Tax Amount")}
       </div>
-      <div class="dashboard-chart-grid efris-chart-grid">
+      <div class="dashboard-chart-grid">
         <section class="dashboard-panel">
           <div class="dashboard-panel-head"><div><p class="eyebrow">Volume trend</p><h3>Error Events Over Time</h3></div><span class="dashboard-panel-note">Live CDC</span></div>
           <div id="efris-trend" class="dashboard-chart loading">Loading error trend…</div>
@@ -129,15 +129,15 @@ export class EfrisErrorsPage {
 
   renderKpis(s) {
     const items = [
-      ["ERROR EVENTS", number.format(Number(s.error_events || 0)), "Captured error rows"],
-      ["AFFECTED INVOICES", number.format(Number(s.affected_invoices || 0)), "Distinct seller references"],
-      ["TAXPAYERS", number.format(Number(s.affected_taxpayers || 0)), "Distinct TINs"],
-      ["DEVICES", number.format(Number(s.affected_devices || 0)), "Distinct EFRIS devices"],
-      ["UGX GROSS AMOUNT", `UGX ${compact.format(Number(s.ugx_gross_amount || 0))}`, money.format(Number(s.ugx_gross_amount || 0))],
-      ["UGX TAX AMOUNT", `UGX ${compact.format(Number(s.ugx_tax_amount || 0))}`, money.format(Number(s.ugx_tax_amount || 0))],
+      ["ERROR EVENTS", number.format(Number(s.error_events || 0)), "Captured error rows", ""],
+      ["AFFECTED INVOICES", number.format(Number(s.affected_invoices || 0)), "Distinct seller references", ""],
+      ["TAXPAYERS", number.format(Number(s.affected_taxpayers || 0)), "Distinct TINs", ""],
+      ["DEVICES", number.format(Number(s.affected_devices || 0)), "Distinct EFRIS devices", ""],
+      ["UGX GROSS AMOUNT", `UGX ${compact.format(Number(s.ugx_gross_amount || 0))}`, money.format(Number(s.ugx_gross_amount || 0)), " dashboard-kpi-money"],
+      ["UGX TAX AMOUNT", `UGX ${compact.format(Number(s.ugx_tax_amount || 0))}`, money.format(Number(s.ugx_tax_amount || 0)), " dashboard-kpi-money"],
     ];
-    document.querySelector("#efris-kpis").innerHTML = items.map(([label,value,note], index) => `
-      <div class="dashboard-kpi-card${index >= 4 ? " efris-money-card" : ""}">
+    document.querySelector("#efris-kpis").innerHTML = items.map(([label,value,note,extra]) => `
+      <div class="dashboard-kpi-card${extra}">
         <div class="dashboard-kpi-accent"></div>
         <span class="dashboard-kpi-label">${label}</span>
         <strong class="dashboard-kpi-value">${escapeHtml(value)}</strong>
@@ -161,16 +161,16 @@ export class EfrisErrorsPage {
       const x = padX + index * (barWidth + gap);
       const y = height - padY - h;
       const label = when(row.bucket);
-      return `<rect x="${x}" y="${y}" width="${barWidth}" height="${h}" rx="3" class="efris-error-bar"><title>${escapeHtml(label)}: ${count} errors</title></rect>`;
+      return `<rect x="${x}" y="${y}" width="${barWidth}" height="${h}" rx="3" fill="var(--ura-yellow)"><title>${escapeHtml(label)}: ${count} errors</title></rect>`;
     }).join("");
-    target.innerHTML = `<svg class="efris-trend-svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="EFRIS error events over time"><line x1="${padX}" y1="${height-padY}" x2="${width-padX}" y2="${height-padY}" class="efris-axis"></line>${bars}</svg>`;
+    target.innerHTML = `<svg style="display:block;width:100%;height:auto;min-height:240px" viewBox="0 0 ${width} ${height}" role="img" aria-label="EFRIS error events over time"><line x1="${padX}" y1="${height-padY}" x2="${width-padX}" y2="${height-padY}" stroke="var(--border)" stroke-width="1"></line>${bars}</svg>`;
   }
 
   renderCodes(rows) {
     const target = document.querySelector("#efris-codes");
     target.classList.remove("loading");
     if (!rows.length) { target.innerHTML = `<div class="empty">No error codes in this time range.</div>`; return; }
-    target.innerHTML = `<div class="table-wrap"><table class="dashboard-table"><thead><tr><th>Code</th><th>Events</th><th>Invoices</th><th>Taxpayers</th></tr></thead><tbody>${rows.map(row => `<tr><td><span class="efris-code-badge">${escapeHtml(row.return_code)}</span></td><td>${number.format(Number(row.occurrences || 0))}</td><td>${number.format(Number(row.invoices || 0))}</td><td>${number.format(Number(row.taxpayers || 0))}</td></tr>`).join("")}</tbody></table></div>`;
+    target.innerHTML = `<div class="table-wrap"><table class="dashboard-table"><thead><tr><th>Code</th><th>Events</th><th>Invoices</th><th>Taxpayers</th></tr></thead><tbody>${rows.map(row => `<tr><td><span class="badge badge-reversed">${escapeHtml(row.return_code)}</span></td><td>${number.format(Number(row.occurrences || 0))}</td><td>${number.format(Number(row.invoices || 0))}</td><td>${number.format(Number(row.taxpayers || 0))}</td></tr>`).join("")}</tbody></table></div>`;
   }
 
   renderTaxpayers(rows) {
@@ -184,6 +184,6 @@ export class EfrisErrorsPage {
     const target = document.querySelector("#efris-recent");
     target.classList.remove("loading");
     if (!rows.length) { target.innerHTML = `<div class="empty">No recent EFRIS error events.</div>`; return; }
-    target.innerHTML = `<div class="table-wrap"><table class="dashboard-table efris-recent-table"><thead><tr><th>Time</th><th>TIN / Device</th><th>Seller Reference</th><th>Code</th><th>Message</th><th>Gross</th></tr></thead><tbody>${rows.map(row => `<tr><td>${escapeHtml(when(row.create_date))}</td><td><strong>${escapeHtml(row.tin)}</strong><br><span class="muted">${escapeHtml(row.device_no)}</span></td><td>${escapeHtml(row.seller_reference_no)}</td><td><span class="efris-code-badge">${escapeHtml(row.return_code)}</span></td><td class="efris-message">${escapeHtml(row.return_msg || "—")}</td><td class="money">${escapeHtml(row.currency || "")} ${number.format(Number(row.gross_amount || 0))}</td></tr>`).join("")}</tbody></table></div>`;
+    target.innerHTML = `<div class="table-wrap"><table class="dashboard-table"><thead><tr><th>Time</th><th>TIN / Device</th><th>Seller Reference</th><th>Code</th><th>Message</th><th>Gross</th></tr></thead><tbody>${rows.map(row => `<tr><td>${escapeHtml(when(row.create_date))}</td><td><strong>${escapeHtml(row.tin)}</strong><br><span class="muted">${escapeHtml(row.device_no)}</span></td><td>${escapeHtml(row.seller_reference_no)}</td><td><span class="badge badge-reversed">${escapeHtml(row.return_code)}</span></td><td style="min-width:220px">${escapeHtml(row.return_msg || "—")}</td><td class="money">${escapeHtml(row.currency || "")} ${number.format(Number(row.gross_amount || 0))}</td></tr>`).join("")}</tbody></table></div>`;
   }
 }
