@@ -10,14 +10,17 @@ from app.config import get_settings
 from app.errors import APIError
 from app.oracle import OracleDatabase, SourceOperationError, SourceUnavailableError
 from app.repositories.dashboard import DashboardRepository
+from app.repositories.efris_errors import EfrisErrorRepository
 from app.repositories.payments import OraclePaymentRepository
 from app.repositories.stations import OracleStationRepository
 from app.repositories.taxpayers import OracleTaxpayerRepository
 from app.routes.dashboard import router as dashboard_router
+from app.routes.efris_errors import router as efris_errors_router
 from app.routes.payments import router as payments_router
 from app.routes.stations import router as stations_router
 from app.routes.taxpayers import router as taxpayers_router
 from app.services.dashboard import DashboardService
+from app.services.efris_errors import EfrisErrorService
 from app.services.payments import PaymentService
 from app.services.stations import StationService
 from app.services.taxpayers import TaxpayerService
@@ -45,20 +48,28 @@ def default_dashboard_service() -> DashboardService:
     return DashboardService(DashboardRepository(db))
 
 
+def default_efris_error_service() -> EfrisErrorService:
+    db = ClickHouseDatabase(get_settings())
+    return EfrisErrorService(EfrisErrorRepository(db))
+
+
 def create_app(
     payment_service=None,
     taxpayer_service=None,
     station_service=None,
     dashboard_service=None,
+    efris_error_service=None,
 ) -> FastAPI:
-    app = FastAPI(title="Internal Transaction Application", version="0.4.0")
+    app = FastAPI(title="Internal Transaction Application", version="0.5.0")
     app.state.payment_service = payment_service or default_payment_service()
     app.state.taxpayer_service = taxpayer_service or default_taxpayer_service()
     app.state.station_service = station_service or default_station_service()
     app.state.dashboard_service = dashboard_service or default_dashboard_service()
+    app.state.efris_error_service = efris_error_service or default_efris_error_service()
     app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
     templates = Jinja2Templates(directory=BASE_DIR / "templates")
     app.include_router(dashboard_router)
+    app.include_router(efris_errors_router)
     app.include_router(payments_router)
     app.include_router(taxpayers_router)
     app.include_router(stations_router)
