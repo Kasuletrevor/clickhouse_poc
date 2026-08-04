@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tax Operations Portal</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand-text">
+        <span class="brand-kicker">INTERNAL</span>
+        <strong>Tax Operations</strong>
+      </div>
+      <nav class="nav-list" aria-label="Primary navigation">
+        <button class="nav-item" data-page="dashboard"><span>▦</span>Dashboard</button>
+        <div class="nav-section">MASTER DATA</div>
+        <button class="nav-item" data-page="taxpayers"><span>◎</span>Taxpayers</button>
+        <button class="nav-item" data-page="stations"><span>⌂</span>Stations</button>
+        <div class="nav-section">TRANSACTIONS</div>
+        <button class="nav-item active" data-page="payments"><span>▣</span>Payments</button>
+        <button class="nav-item" data-page="reports"><span>▥</span>Reports</button>
+        <div class="nav-section">SYSTEM</div>
+        <button class="nav-item" data-page="pipeline"><span>⌁</span>Pipeline Health</button>
+        <button class="nav-item" data-page="events"><span>≋</span>Event Monitor</button>
+        <button class="nav-item" data-page="simulator"><span>▶</span>Simulator</button>
+      </nav>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <div><p class="eyebrow">Revenue Operations</p><h1 id="page-title">Payments</h1></div>
+        <div class="user-chip"><span class="avatar">IU</span><div><strong>Internal User</strong><small>Operations</small></div></div>
+      </header>
+      <section id="app-content" class="content" aria-live="polite"></section>
+    </main>
+  </div>
+
+  <div id="drawer-backdrop" class="drawer-backdrop hidden"></div>
+  <aside id="drawer" class="drawer" aria-hidden="true"></aside>
+  <div id="toast-region" class="toast-region" aria-live="polite"></div>
+
+  <script type="module" src="/static/js/app.js"></script>
+</body>
+</html>
