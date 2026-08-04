@@ -6,6 +6,16 @@ const money = new Intl.NumberFormat("en-UG", {style: "currency", currency: "UGX"
 const when = (value) => value ? new Date(value).toLocaleString("en-UG", {dateStyle:"medium", timeStyle:"short"}) : "—";
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>'"]/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[ch]));
 
+const COMMON_ERRORS = {
+  "1600": "Inventory shortage",
+  "3077": "Buyer TIN is required and cannot be empty",
+  "2249": "Buyer TIN does not exist",
+  "2253": "Duplicate seller reference number",
+  "2785": "Tax amount does not match expected tax amount",
+  "1332": "Tax rate does not match configured tax rate",
+  "3083": "Buyer is not allowed for B2G transaction",
+};
+
 export class EfrisErrorsPage {
   constructor(shell) {
     this.shell = shell;
@@ -14,6 +24,7 @@ export class EfrisErrorsPage {
     this.destroyed = false;
     this.hasRenderedData = false;
     this.minutes = 60;
+    this.taxpayers = [];
   }
 
   async render() {
@@ -29,6 +40,7 @@ export class EfrisErrorsPage {
           <p>Live invoice-error activity captured from Oracle and served from ClickHouse.</p>
         </div>
         <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:flex-end">
+          <button class="btn btn-primary" id="new-efris-error">+ New Error Event</button>
           <select id="efris-range" class="select" style="width:auto;min-width:160px" aria-label="EFRIS time range">
             <option value="15">Last 15 minutes</option>
             <option value="60" selected>Last 1 hour</option>
@@ -67,6 +79,7 @@ export class EfrisErrorsPage {
         </section>
       </div>`;
 
+    document.querySelector("#new-efris-error").onclick = () => this.openCreate();
     document.querySelector("#efris-range").onchange = async (event) => {
       this.minutes = Number(event.target.value || 60);
       await this.refresh(false);
@@ -110,6 +123,106 @@ export class EfrisErrorsPage {
     } finally {
       this.loading = false;
     }
+  }
+
+  async loadTaxpayers() {
+    const data = await api("/api/taxpayers?limit=200");
+    this.taxpayers = data.items || [];
+  }
+
+  taxpayerOptions() {
+    return this.taxpayers.map(taxpayer => `
+      <option value="${escapeHtml(taxpayer.taxpayer_id)}">${escapeHtml(taxpayer.taxpayer_name)} — ${escapeHtml(taxpayer.taxpayer_id)}</option>`).join("");
+  }
+
+  async openCreate() {
+    try {
+      await this.loadTaxpayers();
+    } catch (error) {
+      this.shell.toast(`Taxpayers could not be loaded: ${error.message}`, true);
+      return;
+    }
+
+    if (!this.taxpayers.length) {
+      this.shell.toast("No taxpayers are available for EFRIS event creation.", true);
+      return;
+    }
+
+    const codeOptions = Object.entries(COMMON_ERRORS)
+      .map(([code, message]) => `<option value="${code}">${code} — ${escapeHtml(message)}</option>`)
+      .join("");
+
+    this.shell.openDrawer(`
+      <div class="drawer-head"><div><p class="eyebrow">Source transaction</p><h3>Create EFRIS Error Event</h3></div><button class="close-btn" data-close>×</button></div>
+      <p class="muted">This writes to Oracle only. CDC then carries the committed event through Debezium, Kafka and ClickHouse.</p>
+      <form id="efris-error-form">
+        <div class="field"><label>Taxpayer</label><select class="select" name="tin" id="efris-tin" required><option value="">Select taxpayer</option>${this.taxpayerOptions()}</select></div>
+        <div class="field"><label>EFRIS Device</label><select class="select" name="device_no" id="efris-device" required disabled><option value="">Select taxpayer first</option></select></div>
+        <div class="field"><label>Error Code</label><select class="select" name="return_code" id="efris-code" required><option value="">Select error code</option>${codeOptions}</select></div>
+        <div class="field"><label>Error Message</label><input class="input" name="return_msg" id="efris-message" maxlength="256" required placeholder="EFRIS return message"></div>
+        <div class="field"><label>Seller Reference <span class="muted">(optional)</span></label><input class="input" name="seller_reference_no" maxlength="50" placeholder="Generated automatically if blank"></div>
+        <div class="detail-grid">
+          <div class="field"><label>Gross Amount</label><input class="input" name="gross_amount" type="number" min="0.01" step="0.01" required placeholder="850000"></div>
+          <div class="field"><label>Tax Amount</label><input class="input" name="tax_amount" type="number" min="0" step="0.01" required placeholder="129661.02"></div>
+        </div>
+        <div class="field"><label>Currency</label><select class="select" name="currency"><option value="UGX">UGX</option><option value="USD">USD</option></select></div>
+        <div class="field"><label>Item Description <span class="muted">(optional)</span></label><input class="input" name="item_description" maxlength="2000" placeholder="POC ELECTRONICS"></div>
+        <div class="form-actions"><button type="button" class="btn" data-close>Cancel</button><button class="btn btn-primary" type="submit">Create Error Event</button></div>
+      </form>`);
+
+    document.querySelectorAll("[data-close]").forEach(el => el.onclick = () => this.shell.closeDrawer());
+
+    const tinSelect = document.querySelector("#efris-tin");
+    const deviceSelect = document.querySelector("#efris-device");
+    const codeSelect = document.querySelector("#efris-code");
+    const messageInput = document.querySelector("#efris-message");
+
+    tinSelect.onchange = async () => {
+      const tin = tinSelect.value;
+      deviceSelect.disabled = true;
+      deviceSelect.innerHTML = `<option value="">Loading devices…</option>`;
+      if (!tin) {
+        deviceSelect.innerHTML = `<option value="">Select taxpayer first</option>`;
+        return;
+      }
+      try {
+        const devices = await api(`/api/efris-errors/devices?tin=${encodeURIComponent(tin)}`);
+        if (!devices.length) {
+          deviceSelect.innerHTML = `<option value="">No EFRIS devices registered</option>`;
+          return;
+        }
+        deviceSelect.innerHTML = `<option value="">Select device</option>${devices.map(d => `<option value="${escapeHtml(d.device_no)}">${escapeHtml(d.device_no)}${d.device_type ? ` — ${escapeHtml(d.device_type)}` : ""}</option>`).join("")}`;
+        deviceSelect.disabled = false;
+      } catch (error) {
+        deviceSelect.innerHTML = `<option value="">Unable to load devices</option>`;
+        this.shell.toast(error.message, true);
+      }
+    };
+
+    codeSelect.onchange = () => {
+      if (COMMON_ERRORS[codeSelect.value]) messageInput.value = COMMON_ERRORS[codeSelect.value];
+    };
+
+    document.querySelector("#efris-error-form").onsubmit = async (event) => {
+      event.preventDefault();
+      const form = new FormData(event.target);
+      const submit = event.target.querySelector("button[type=submit]");
+      submit.disabled = true;
+      submit.textContent = "Creating…";
+      try {
+        const payload = Object.fromEntries(form.entries());
+        if (!payload.seller_reference_no) payload.seller_reference_no = null;
+        if (!payload.item_description) payload.item_description = null;
+        const created = await api("/api/efris-errors", {method:"POST", body:JSON.stringify(payload)});
+        this.shell.closeDrawer();
+        this.shell.toast(`EFRIS error ${created.error_event_id} committed to Oracle. Waiting for CDC ingestion.`);
+        window.setTimeout(() => this.refresh(false), 3000);
+      } catch (error) {
+        this.shell.toast(error.message, true);
+        submit.disabled = false;
+        submit.textContent = "Create Error Event";
+      }
+    };
   }
 
   renderUnavailable(message) {
