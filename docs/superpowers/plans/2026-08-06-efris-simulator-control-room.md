@@ -2,76 +2,67 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Turn the existing command-line EFRIS workload generator into a browser-controlled, refresh-safe Simulator Control Room that starts one server-side Oracle source workload, tracks exact run progress through ClickHouse, supports Pause/Resume/Stop, and preserves truthful Oracle → Debezium → Kafka → ClickHouse lineage.
+**Goal:** Build a refresh-safe browser Simulator Control Room that starts one detached server-side EFRIS workload, writes only to Oracle, supports Pause/Resume/Stop, and continuously reconciles Oracle source commits with ClickHouse delivery and CDC latency.
 
-**Architecture:** FastAPI owns run orchestration only; the actual workload runs in a detached Python worker process on the RHEL host. A small atomic JSON run registry under `runtime/simulator/` survives browser refreshes and FastAPI process restarts. The worker writes only to Oracle; the status API combines worker/run state, exact Oracle source rows, ClickHouse-arrived rows, CDC latency, and independently measured pipeline health. The browser polls this status API and never owns simulation execution.
+**Architecture:** FastAPI controls a detached Python worker process. The worker owns the Oracle connection and event-generation loop; the browser only calls control/status APIs. A small atomic JSON registry under `runtime/simulator/` survives page refreshes and FastAPI restarts. Status combines worker state, exact Oracle rows, ClickHouse rows, real CDC lineage, and independent Oracle/Debezium/Kafka/ClickHouse health checks.
 
-**Tech Stack:** Python 3, FastAPI, `oracledb`, existing ClickHouse HTTP wrapper, standard-library `subprocess`, `fcntl`, `urllib`, `socket`, JSON persistence, vanilla JavaScript, existing HTML/CSS application shell, pytest/httpx.
+**Tech Stack:** Python 3, FastAPI, `oracledb`, existing ClickHouse HTTP wrapper, standard-library `subprocess`, `fcntl`, `urllib`, `socket`, JSON, vanilla JavaScript, existing HTML/CSS shell, pytest/httpx.
 
 ## Global Constraints
 
-- Browser refresh, navigation away, tab closure, and reopening the app must not stop an active simulation.
-- The browser never generates EFRIS events and never writes to Kafka or ClickHouse.
-- The worker writes only to `CDC_APP.T_INVOICE_ERROR_LOG`; downstream delivery remains Oracle redo → Debezium → Kafka → ClickHouse.
-- Only one simulator run may be active on the POC host at a time.
-- Default workload remains `14.00 events/sec`, `600 seconds`, `12% retry probability`, and `8,400` target source events.
-- Pause stops new Oracle writes while downstream CDC continues draining; Resume continues the same run ID and sequence.
-- Stop is final for that run and moves the run to `draining`; the run becomes `completed` only when ClickHouse has received all committed source events.
-- Progress is source-event-count based. For finite runs, generation stops exactly when `generated == target_events`; paused time does not consume active duration.
-- The UI must not invent Debezium/Kafka per-event stage state. Intermediate systems show health; exact per-event lineage is shown only once downstream evidence exists.
-- Runtime state must contain no password, connection string, or secret.
-- `T_INVOICE_ERROR_LOG.ID` is `VARCHAR2(32)`, so generated source IDs must stay within 32 characters.
-- Keep the existing FastAPI + HTML/CSS + vanilla JavaScript architecture; do not add Celery, Redis, React, Node, or another orchestration dependency.
-- Generated simulator population files remain local runtime artifacts and must not be committed.
-- Current seeded population remains `20 stations`, `200 taxpayers`, `500 devices`, `15 error codes`.
+- Browser refresh, navigation, tab closure, and reopening the app must not stop an active run.
+- The worker writes only to `CDC_APP.T_INVOICE_ERROR_LOG`; neither browser nor FastAPI publishes directly to Kafka or writes to ClickHouse.
+- Only one simulator run may be active on the POC host.
+- Default run: `14.00 events/sec`, `600 seconds`, `12% retry probability`, `8,400` exact target events.
+- Pause stops new Oracle writes and freezes active-generation time; downstream CDC continues draining.
+- Resume continues the same `run_id`, `source_prefix`, seller-reference retry pool, and event sequence without a catch-up burst.
+- Stop is final for that run: source generation ends, state becomes `draining`, then `completed` when ClickHouse receives all committed source events.
+- Finite runs stop by exact target count, not a wall-clock boundary, so `14 × 60 = 840` and `14 × 600 = 8,400` exactly when there are no source failures.
+- Intermediate systems show health only. The UI must not claim an individual event reached Debezium or Kafka before downstream evidence exists.
+- Runtime state must contain no passwords, tokens, connection strings, or other secrets.
+- `T_INVOICE_ERROR_LOG.ID` is `VARCHAR2(32)`; run-scoped source IDs must fit that column.
+- Keep FastAPI + HTML/CSS + vanilla JavaScript. Do not add Celery, Redis, React, Node, or another job system.
+- Existing synthetic population remains `20 stations`, `200 taxpayers`, `500 devices`, `15 error codes`.
 
----
+## File Map
 
-## File Structure
-
-### New backend files
+**Create**
 
 - `app/simulator/__init__.py` — package marker.
-- `app/simulator/models.py` — run configuration, run record, status constants, identity generation, serialization.
-- `app/simulator/engine.py` — reusable weighted EFRIS event factory and monotonic rate pacer used by both CLI and worker.
-- `app/simulator/store.py` — atomic JSON run registry, active-run lock, run history, stale-safe file updates.
-- `app/simulator/worker.py` — detached server-side worker entry point; owns Oracle connection, pacing, Pause/Resume/Stop loop, heartbeat.
-- `app/simulator/manager.py` — starts detached worker, issues commands through run state, detects stale/dead workers.
-- `app/repositories/simulator.py` — exact Oracle/ClickHouse reconciliation, run-level analytics, recent event merge, pipeline health checks.
-- `app/services/simulator.py` — Simulator use cases and run-state transitions exposed to the API.
+- `app/simulator/models.py` — `RunConfig`, `RunRecord`, statuses, run identity.
+- `app/simulator/engine.py` — reusable weighted EFRIS event factory and rate pacer.
+- `app/simulator/store.py` — atomic JSON registry and active-run lock.
+- `app/simulator/worker.py` — detached Oracle workload process.
+- `app/simulator/manager.py` — process launch, Pause/Resume/Stop, stale detection.
+- `app/repositories/simulator.py` — exact Oracle/ClickHouse reconciliation, lineage, latency, health.
+- `app/services/simulator.py` — run use cases and status composition.
 - `app/schemas/simulator.py` — Start request validation.
-- `app/routes/simulator.py` — Start/status/pause/resume/stop/history/events endpoints.
-
-### New frontend file
-
-- `app/static/js/simulator.js` — complete Simulator page, reconnect-safe polling, controls, live run view, event feed, charts.
-
-### New tests
-
+- `app/routes/simulator.py` — Simulator REST API.
+- `app/static/js/simulator.js` — Simulator Control Room page.
 - `tests/test_simulator_models.py`
-- `tests/test_simulator_store.py`
 - `tests/test_simulator_engine.py`
+- `tests/test_simulator_store.py`
 - `tests/test_simulator_manager.py`
 - `tests/test_simulator_service.py`
 - `tests/test_simulator_api.py`
 
-### Modified files
+**Modify**
 
-- `scripts/run_efris_simulator.py` — reuse the new engine; retain CLI capability.
-- `app/config.py` — add Debezium/Kafka/runtime simulator settings.
-- `app/errors.py` — allow structured error details for `simulation_already_running`.
-- `app/main.py` — wire simulator service/router and structured API error response.
-- `app/static/js/api.js` — preserve backend error code/details on thrown errors.
-- `app/static/js/app.js` — route the existing Simulator nav item to `SimulatorPage`.
-- `app/static/css/app.css` — Simulator Control Room layouts, states, responsive behavior, accessible status styling.
-- `.gitignore` — ignore `runtime/simulator/` and worker logs.
-- `.env.example` — document runtime/connector/broker settings without secrets.
-- `simulation/README.md` — document browser-controlled and CLI modes.
-- `docs/efris-error-monitor.md` — add the browser-controlled simulator milestone and verification flow.
+- `scripts/run_efris_simulator.py`
+- `app/config.py`
+- `app/errors.py`
+- `app/main.py`
+- `app/static/js/api.js`
+- `app/static/js/app.js`
+- `app/static/css/app.css`
+- `.gitignore`
+- `.env.example`
+- `simulation/README.md`
+- `docs/efris-error-monitor.md`
 
 ---
 
-### Task 1: Extract Reusable Simulator Engine and Exact Run Identity
+### Task 1: Extract the Reusable Workload Engine
 
 **Files:**
 - Create: `app/simulator/__init__.py`
@@ -82,13 +73,12 @@
 - Test: `tests/test_simulator_engine.py`
 
 **Interfaces:**
-- Produces: `RunConfig`, `RunRecord`, `make_run_identity()`, `EfrisEventFactory`, `RatePacer`.
-- `RunConfig(rate: float, duration_seconds: int, retry_probability: float, random_seed: int)` exposes `target_events: int | None`.
-- `make_run_identity(now: datetime | None = None, token: str | None = None) -> tuple[str, str]` returns `(run_id, source_prefix)`.
-- `EfrisEventFactory.next_bindings(cursor, sequence: int) -> dict` returns Oracle bind values including deterministic run-scoped `source_id`.
-- `RatePacer.wait_next()` paces generation using `time.perf_counter()` and supports `reset()` after Resume so paused time never causes a catch-up burst.
+- Produces `RunConfig`, `RunRecord`, `make_run_identity()`, `format_source_id()`, `EfrisEventFactory`, `RatePacer`.
+- `RunConfig.target_events` returns `None` only for continuous duration `0`; otherwise `round(rate * duration_seconds)`.
+- `make_run_identity(now, token)` returns `(run_id, source_prefix)`.
+- `EfrisEventFactory.next_bindings(cursor, sequence)` returns the bind dictionary for one Oracle insert.
 
-- [ ] **Step 1: Write failing model tests for finite target count and 32-character-safe identities**
+- [ ] **Step 1: Write failing model tests**
 
 ```python
 # tests/test_simulator_models.py
@@ -97,17 +87,17 @@ from datetime import datetime, timezone
 from app.simulator.models import RunConfig, make_run_identity
 
 
-def test_finite_config_has_exact_target_event_count():
+def test_finite_target_is_exact():
     config = RunConfig(rate=14.0, duration_seconds=60, retry_probability=0.12, random_seed=1)
     assert config.target_events == 840
 
 
-def test_continuous_config_has_no_target_event_count():
+def test_continuous_run_has_no_target():
     config = RunConfig(rate=14.0, duration_seconds=0, retry_probability=0.12, random_seed=1)
     assert config.target_events is None
 
 
-def test_run_identity_is_traceable_and_source_ids_fit_oracle_column():
+def test_identity_is_traceable_and_compact():
     now = datetime(2026, 8, 6, 8, 47, 1, tzinfo=timezone.utc)
     run_id, prefix = make_run_identity(now=now, token="A1")
     assert run_id == "EFR-20260806-084701-A1"
@@ -115,17 +105,15 @@ def test_run_identity_is_traceable_and_source_ids_fit_oracle_column():
     assert len(f"{prefix}-999999") <= 32
 ```
 
-- [ ] **Step 2: Run the model tests and confirm they fail because the simulator package does not yet exist**
-
-Run:
+- [ ] **Step 2: Run the tests and verify the expected import failure**
 
 ```bash
 pytest tests/test_simulator_models.py -q
 ```
 
-Expected: import failure for `app.simulator.models`.
+Expected: failure because `app.simulator.models` does not yet exist.
 
-- [ ] **Step 3: Implement run configuration, statuses, serialization and identity generation**
+- [ ] **Step 3: Implement run models and identity generation**
 
 ```python
 # app/simulator/models.py
@@ -149,9 +137,7 @@ class RunConfig:
 
     @property
     def target_events(self) -> int | None:
-        if self.duration_seconds == 0:
-            return None
-        return round(self.rate * self.duration_seconds)
+        return None if self.duration_seconds == 0 else round(self.rate * self.duration_seconds)
 
 
 @dataclass
@@ -188,44 +174,33 @@ class RunRecord:
 def make_run_identity(now: datetime | None = None, token: str | None = None) -> tuple[str, str]:
     now = now or datetime.now(timezone.utc)
     token = token or "".join(choice(ascii_uppercase + digits) for _ in range(2))
-    run_id = f"EFR-{now:%Y%m%d-%H%M%S}-{token}"
-    source_prefix = f"S{now:%y%m%d}{token}"
-    return run_id, source_prefix
+    return f"EFR-{now:%Y%m%d-%H%M%S}-{token}", f"S{now:%y%m%d}{token}"
 ```
 
-- [ ] **Step 4: Write failing engine tests for deterministic source IDs, exact retry reuse and pacer reset**
+- [ ] **Step 4: Write failing engine tests**
 
 ```python
 # tests/test_simulator_engine.py
-from app.simulator.engine import format_source_id, RatePacer
+from app.simulator.engine import RatePacer, format_source_id
 
 
-def test_source_id_uses_run_prefix_and_monotonic_sequence():
+def test_source_id_uses_monotonic_run_sequence():
     assert format_source_id("S260806A1", 1) == "S260806A1-000001"
-    assert format_source_id("S260806A1", 841) == "S260806A1-000841"
+    assert format_source_id("S260806A1", 840) == "S260806A1-000840"
 
 
-def test_rate_pacer_reset_discards_old_deadline():
-    clock_values = iter([100.0, 100.0, 105.0])
-    pacer = RatePacer(rate=14.0, clock=lambda: next(clock_values), sleeper=lambda _: None)
+def test_pacer_reset_uses_current_clock():
+    values = iter([100.0, 105.0])
+    pacer = RatePacer(rate=14.0, clock=lambda: next(values), sleeper=lambda seconds: None)
     pacer.reset()
-    assert pacer.next_due >= 100.0
+    assert pacer.next_due == 105.0
 ```
 
-- [ ] **Step 5: Implement the reusable event factory and pacer by extracting existing CLI behavior without changing workload semantics**
-
-The engine must preserve weighted taxpayers/devices/error codes, 12% retry behavior, VAT calculation, product selection, seller-reference sequence generation and Oracle bind shape. The run-specific source ID changes from UUID-based `SIMERR...` to deterministic sequence IDs.
+- [ ] **Step 5: Implement source ID and monotonic pacer**
 
 ```python
 # app/simulator/engine.py
-from __future__ import annotations
-
-import json
-import random
 import time
-from collections import defaultdict, deque
-from decimal import Decimal, ROUND_HALF_UP
-from pathlib import Path
 
 
 def format_source_id(source_prefix: str, sequence: int) -> str:
@@ -237,7 +212,6 @@ def format_source_id(source_prefix: str, sequence: int) -> str:
 
 class RatePacer:
     def __init__(self, rate: float, clock=time.perf_counter, sleeper=time.sleep):
-        self.rate = rate
         self.interval = 1.0 / rate
         self.clock = clock
         self.sleeper = sleeper
@@ -255,15 +229,15 @@ class RatePacer:
         return max(0.0, self.clock() - self.next_due)
 ```
 
-Implement `EfrisEventFactory` with constructor arguments `sim_dir`, `source_prefix`, `seed`, `retry_probability`, and method `next_bindings(cursor, sequence)` returning exactly the bind keys expected by `T_INVOICE_ERROR_LOG`.
+In the same file, extract the current JSON loading, weighted taxpayer selection, taxpayer-owned device selection, 15-code weighted selection, products, retry pool, seller-reference sequence, gross/tax generation, and bind creation into `EfrisEventFactory`. Preserve current business behavior exactly except for deterministic run-scoped `source_id`.
 
-- [ ] **Step 6: Refactor the CLI to call the shared engine and stop finite runs by exact target count**
+- [ ] **Step 6: Refactor the CLI to use the shared engine and exact finite target count**
 
-Change the CLI finite loop condition from elapsed-time boundary checking to:
+Finite loop:
 
 ```python
-target_events = config.target_events
-while target_events is None or generated < target_events:
+target = config.target_events
+while target is None or generated < target:
     pacer.wait_next()
     bindings = factory.next_bindings(cursor, generated + 1)
     cursor.execute(INSERT_SQL, bindings)
@@ -271,51 +245,46 @@ while target_events is None or generated < target_events:
     generated += 1
 ```
 
-Expected result for `--rate 14 --duration 60`: exactly `840` successful source commits rather than the current boundary-dependent `841`.
+Expected future one-minute run at 14/sec: exactly `840` successful commits.
 
-- [ ] **Step 7: Run focused tests and the existing Python compilation check**
+- [ ] **Step 7: Verify and commit**
 
 ```bash
 pytest tests/test_simulator_models.py tests/test_simulator_engine.py -q
 python -m compileall -q app scripts
-```
-
-Expected: all tests pass; compile command exits 0.
-
-- [ ] **Step 8: Commit the engine extraction**
-
-```bash
 git add app/simulator scripts/run_efris_simulator.py tests/test_simulator_models.py tests/test_simulator_engine.py
 git commit -m "refactor: extract reusable EFRIS simulation engine"
 ```
 
 ---
 
-### Task 2: Durable Run Registry and State Machine
+### Task 2: Add Durable Run State and Detached Worker Control
 
 **Files:**
 - Create: `app/simulator/store.py`
-- Test: `tests/test_simulator_store.py`
+- Create: `app/simulator/worker.py`
+- Create: `app/simulator/manager.py`
 - Modify: `.gitignore`
+- Test: `tests/test_simulator_store.py`
+- Test: `tests/test_simulator_manager.py`
 
 **Interfaces:**
-- Consumes: `RunRecord`, `ACTIVE_STATUSES` from Task 1.
-- Produces: `RunStore(runtime_dir: Path)`, `create_run(record)`, `get_run(run_id)`, `get_active_run()`, `update_run(run_id, mutator)`, `clear_active(run_id)`, `list_runs(limit)`.
-- All state writes are atomic (`tempfile` + `os.replace`) and protected by `fcntl.flock` on `runtime/simulator/registry.lock`.
+- `RunStore.create_run(record)`, `get_run(run_id)`, `get_active_run()`, `update_run(run_id, mutator)`, `clear_active(run_id)`, `list_runs(limit)`.
+- `SimulatorManager.start(config)`, `pause(run_id)`, `resume(run_id)`, `stop(run_id)`, `reconcile_worker_state(run)`.
+- Worker entry point: `python -m app.simulator.worker --run-id RUN_ID`.
+- Durable commands: `run`, `pause`, `stop`; actual statuses: `starting`, `running`, `paused`, `draining`, `completed`, `failed`, `stale`.
 
-- [ ] **Step 1: Write failing tests for active-run exclusivity, atomic update and history**
+- [ ] **Step 1: Write failing store tests**
 
 ```python
 # tests/test_simulator_store.py
-from pathlib import Path
-
 import pytest
 
 from app.simulator.models import RunRecord
 from app.simulator.store import ActiveRunExists, RunStore
 
 
-def record(run_id="EFR-1", prefix="S1"):
+def make_record(run_id="EFR-1", prefix="S1"):
     return RunRecord(
         run_id=run_id,
         source_prefix=prefix,
@@ -329,141 +298,79 @@ def record(run_id="EFR-1", prefix="S1"):
     )
 
 
-def test_only_one_active_run_can_be_created(tmp_path: Path):
+def test_only_one_active_run_is_allowed(tmp_path):
     store = RunStore(tmp_path)
-    store.create_run(record())
+    store.create_run(make_record())
     with pytest.raises(ActiveRunExists):
-        store.create_run(record("EFR-2", "S2"))
+        store.create_run(make_record("EFR-2", "S2"))
 
 
-def test_update_round_trips_without_losing_fields(tmp_path: Path):
+def test_atomic_update_round_trips(tmp_path):
     store = RunStore(tmp_path)
-    store.create_run(record())
-    updated = store.update_run("EFR-1", lambda run: setattr(run, "generated", 14))
-    assert updated.generated == 14
+    store.create_run(make_record())
+    store.update_run("EFR-1", lambda run: setattr(run, "generated", 14))
     assert store.get_run("EFR-1").generated == 14
 ```
 
-- [ ] **Step 2: Run the store tests and confirm import failure**
+- [ ] **Step 2: Implement locked atomic registry**
 
-```bash
-pytest tests/test_simulator_store.py -q
-```
+`RunStore` must create `runtime/simulator/runs/`, lock `runtime/simulator/registry.lock` with `fcntl.flock(LOCK_EX)`, write JSON to a temporary file in the same directory, then call `os.replace()` for atomic replacement. `create_run()` checks and writes the active pointer while holding the same lock.
 
-Expected: import failure for `app.simulator.store`.
-
-- [ ] **Step 3: Implement the locked atomic registry**
-
-Core behavior:
-
-```python
-# app/simulator/store.py
-class ActiveRunExists(RuntimeError):
-    def __init__(self, active_run):
-        self.active_run = active_run
-        super().__init__(f"Simulation {active_run.run_id} is already active")
-
-
-class RunStore:
-    def __init__(self, runtime_dir: Path):
-        self.runtime_dir = Path(runtime_dir)
-        self.runs_dir = self.runtime_dir / "runs"
-        self.active_path = self.runtime_dir / "active.json"
-        self.lock_path = self.runtime_dir / "registry.lock"
-        self.runs_dir.mkdir(parents=True, exist_ok=True)
-```
-
-Implement a private `_locked()` context manager with `fcntl.flock(..., LOCK_EX)`, `_atomic_write(path, payload)` using a file in the same directory followed by `os.replace`, and ensure `create_run()` checks the active pointer while holding the same lock used to create the new active record.
-
-- [ ] **Step 4: Add runtime artifacts to gitignore**
-
-Append:
+Add to `.gitignore`:
 
 ```gitignore
-# EFRIS simulator server-side runtime state
 runtime/simulator/
 ```
 
-- [ ] **Step 5: Run store tests, including a second test process if practical**
-
-```bash
-pytest tests/test_simulator_store.py -q
-```
-
-Expected: all store tests pass.
-
-- [ ] **Step 6: Commit the run registry**
-
-```bash
-git add app/simulator/store.py tests/test_simulator_store.py .gitignore
-git commit -m "feat: add durable simulator run registry"
-```
-
----
-
-### Task 3: Detached Worker and Run Manager
-
-**Files:**
-- Create: `app/simulator/worker.py`
-- Create: `app/simulator/manager.py`
-- Test: `tests/test_simulator_manager.py`
-
-**Interfaces:**
-- Consumes: `RunStore`, `RunRecord`, `EfrisEventFactory`, `RatePacer`, existing `OracleDatabase/get_settings()`.
-- Produces: `SimulatorManager.start(config)`, `pause(run_id)`, `resume(run_id)`, `stop(run_id)`, `reconcile_worker_state(run)`.
-- Worker entry point: `python -m app.simulator.worker --run-id <run_id>`.
-- Command field meanings: `run`, `pause`, `stop`; status field meanings remain `starting`, `running`, `paused`, `draining`, `completed`, `failed`, `stale`.
-
-- [ ] **Step 1: Write failing manager tests using a fake process launcher and fake PID probe**
+- [ ] **Step 3: Write failing manager state-transition tests**
 
 ```python
 # tests/test_simulator_manager.py
-from app.simulator.models import RunConfig
 from app.simulator.manager import SimulatorManager
+from app.simulator.models import RunConfig, RunRecord
 from app.simulator.store import RunStore
 
 
-def test_start_persists_pid_and_starting_run(tmp_path):
-    launched = []
-
-    class FakeProcess:
-        pid = 4321
-
-    def launcher(*args, **kwargs):
-        launched.append((args, kwargs))
-        return FakeProcess()
-
-    manager = SimulatorManager(RunStore(tmp_path), launcher=launcher)
-    run = manager.start(RunConfig(14.0, 60, 0.12, 1))
-    assert run.pid == 4321
-    assert run.status == "starting"
-    assert launched
+def running_record():
+    return RunRecord(
+        run_id="EFR-TEST",
+        source_prefix="S260806A1",
+        status="running",
+        command="run",
+        rate=14.0,
+        duration_seconds=60,
+        target_events=840,
+        retry_probability=0.12,
+        random_seed=1,
+        pid=4321,
+    )
 
 
-def test_pause_resume_stop_write_commands_without_killing_worker(tmp_path):
-    # create active running record in store, then assert command changes:
-    # running -> pause, paused -> run, running -> stop
-    ...
+def test_pause_resume_stop_change_durable_command(tmp_path):
+    store = RunStore(tmp_path)
+    store.create_run(running_record())
+    manager = SimulatorManager(store=store, launcher=lambda *args, **kwargs: None, pid_alive=lambda pid: True)
+
+    paused = manager.pause("EFR-TEST")
+    assert paused.command == "pause"
+
+    store.update_run("EFR-TEST", lambda run: setattr(run, "status", "paused"))
+    resumed = manager.resume("EFR-TEST")
+    assert resumed.command == "run"
+
+    store.update_run("EFR-TEST", lambda run: setattr(run, "status", "running"))
+    stopped = manager.stop("EFR-TEST")
+    assert stopped.command == "stop"
 ```
 
-Replace the ellipsis in the actual test with a complete seeded `RunRecord` fixture and explicit assertions; do not leave placeholders in committed tests.
+- [ ] **Step 4: Implement detached worker launch**
 
-- [ ] **Step 2: Run the manager test and verify failure**
-
-```bash
-pytest tests/test_simulator_manager.py -q
-```
-
-Expected: import failure for `app.simulator.manager`.
-
-- [ ] **Step 3: Implement detached worker launch in the manager**
-
-The manager must launch with the same Python interpreter and inherited environment, but runtime JSON must not store the environment:
+Use the same interpreter and inherited environment; store only PID and sanitized state:
 
 ```python
 process = subprocess.Popen(
     [sys.executable, "-m", "app.simulator.worker", "--run-id", run.run_id],
-    cwd=str(PROJECT_ROOT),
+    cwd=str(project_root),
     stdin=subprocess.DEVNULL,
     stdout=log_handle,
     stderr=subprocess.STDOUT,
@@ -472,21 +379,11 @@ process = subprocess.Popen(
 )
 ```
 
-The manager must persist `pid` after successful launch and mark the run `failed` plus clear the active pointer if process creation raises.
+If launch fails, mark the run `failed` and clear its active pointer.
 
-- [ ] **Step 4: Implement Pause/Resume/Stop as durable commands rather than Unix signal semantics**
+- [ ] **Step 5: Implement worker Pause/Resume/Stop loop**
 
-`pause()` only accepts an actual `running` run and writes `command="pause"`.
-
-`resume()` only accepts `paused` and writes `command="run"`.
-
-`stop()` accepts `running` or `paused` and writes `command="stop"`; the worker transitions the actual status to `draining` after it stops source generation.
-
-Return idempotently if the requested state is already reached where that is safe; otherwise raise a domain error with the current state.
-
-- [ ] **Step 5: Implement the worker loop**
-
-Worker behavior:
+Core loop:
 
 ```python
 while run.target_events is None or run.generated < run.target_events:
@@ -497,11 +394,11 @@ while run.target_events is None or run.generated < run.target_events:
         break
 
     if current.command == "pause":
-        enter_paused_state_once()
+        enter_paused_state()
         time.sleep(0.2)
         continue
 
-    if returning_from_pause:
+    if resumed_from_pause:
         pacer.reset()
 
     pacer.wait_next()
@@ -511,62 +408,41 @@ while run.target_events is None or run.generated < run.target_events:
     record_successful_commit()
 ```
 
-Requirements inside the worker:
+The worker must update heartbeat at least once per second, preserve event sequence, exclude pause duration from active elapsed time, bound source-rate history, set `draining` on natural finite completion, and set `failed` with a sanitized message on fatal source failure.
 
-- mark `running` after Oracle connection and factory setup succeed;
-- update `last_heartbeat` at least once per second;
-- update `generated`, `last_sequence`, `active_elapsed_seconds`, and a bounded source-rate sample list;
-- exclude paused time from `active_elapsed_seconds`;
-- after natural target completion, set `draining`;
-- on `KeyboardInterrupt`/explicit stop, do not delete source rows;
-- on fatal source exception, rollback, increment `failures`, set `failed`, store a sanitized error summary, and clear active pointer only when final-state rules allow;
-- never write a password or raw connection string to state/log output.
+- [ ] **Step 6: Implement stale-worker detection**
 
-- [ ] **Step 6: Add stale/dead-worker reconciliation**
+For `starting`, `running`, or `paused`, mark the run `stale` when the PID is absent or heartbeat age exceeds the configured threshold. Use `os.kill(pid, 0)` only as a liveness probe.
 
-`SimulatorManager.reconcile_worker_state(run)` must use both PID existence and heartbeat age. For statuses `starting`, `running`, or `paused`, if the process does not exist or heartbeat is older than a configured threshold, mark `stale` rather than continuing to display RUNNING.
-
-Use `os.kill(pid, 0)` only as a liveness probe; do not send a terminating signal during ordinary state reconciliation.
-
-- [ ] **Step 7: Run manager tests and compilation**
+- [ ] **Step 7: Verify and commit**
 
 ```bash
-pytest tests/test_simulator_manager.py -q
+pytest tests/test_simulator_store.py tests/test_simulator_manager.py -q
 python -m compileall -q app/simulator
-```
-
-Expected: all pass.
-
-- [ ] **Step 8: Commit detached worker orchestration**
-
-```bash
-git add app/simulator/worker.py app/simulator/manager.py tests/test_simulator_manager.py
-git commit -m "feat: run EFRIS simulation in detached worker"
+git add app/simulator/store.py app/simulator/worker.py app/simulator/manager.py tests/test_simulator_store.py tests/test_simulator_manager.py .gitignore
+git commit -m "feat: add detached simulator worker control"
 ```
 
 ---
 
-### Task 4: Exact Reconciliation, CDC Analytics and Pipeline Health
+### Task 3: Add Exact Reconciliation, Lineage, Latency and Health
 
 **Files:**
 - Create: `app/repositories/simulator.py`
 - Modify: `app/config.py`
 - Modify: `.env.example`
-- Test: `tests/test_simulator_service.py` (repository fakes are used here rather than integration DBs)
+- Test: `tests/test_simulator_service.py`
 
 **Interfaces:**
-- Produces repository methods:
-  - `oracle_run_summary(source_prefix) -> dict`
-  - `clickhouse_run_summary(source_prefix) -> dict`
-  - `clickhouse_latency(source_prefix) -> dict`
-  - `recent_events(source_prefix, limit=40) -> list[dict]`
-  - `arrival_throughput(source_prefix) -> list[dict]`
-  - `pipeline_health() -> dict`
-- `pipeline_health()` returns exact stage states `healthy`, `degraded`, `unavailable`, or `unknown` plus short detail text.
+- `oracle_run_summary(source_prefix)`
+- `clickhouse_run_summary(source_prefix)`
+- `recent_events(source_prefix, limit=40)`
+- `arrival_throughput(source_prefix)`
+- `pipeline_health()`
 
-- [ ] **Step 1: Extend application settings with non-secret observability/runtime configuration**
+- [ ] **Step 1: Add settings**
 
-Add to `Settings` in `app/config.py`:
+Add to `Settings`:
 
 ```python
 debezium_url: str = os.getenv("DEBEZIUM_URL", "http://localhost:8083")
@@ -576,11 +452,9 @@ simulator_runtime_dir: str = os.getenv("SIMULATOR_RUNTIME_DIR", "runtime/simulat
 simulator_stale_seconds: int = int(os.getenv("SIMULATOR_STALE_SECONDS", "10"))
 ```
 
-Document the same keys in `.env.example`; do not place real credentials there.
+Document the same keys with blank/non-secret defaults in `.env.example`.
 
-- [ ] **Step 2: Implement exact Oracle run summary by source prefix**
-
-Use a bound prefix, not string interpolation:
+- [ ] **Step 2: Implement exact Oracle run summary with a bound prefix**
 
 ```sql
 SELECT
@@ -597,11 +471,9 @@ WHERE ID LIKE :prefix
 
 Bind `prefix=f"{source_prefix}-%"`.
 
-`oracle_committed` is this exact row count when Oracle is available; worker `generated` remains the fallback counter when Oracle is temporarily unavailable.
+- [ ] **Step 3: Implement ClickHouse delivery and latency summary**
 
-- [ ] **Step 3: Implement ClickHouse run summary and latency metrics**
-
-Use `startsWith(ifNull(id, ''), '<escaped-prefix>-')` and return:
+Use the existing ClickHouse query wrapper and a safely escaped server-generated prefix:
 
 ```sql
 SELECT
@@ -617,16 +489,14 @@ SELECT
     quantileExact(0.99)(dateDiff('millisecond', source_commit_ts, ingested_at)) AS p99_ms,
     max(dateDiff('millisecond', source_commit_ts, ingested_at)) AS max_ms
 FROM analytics.raw_efris_error_log
-WHERE startsWith(ifNull(id, ''), '<prefix>-')
+WHERE startsWith(ifNull(id, ''), 'S260806A1-')
 ```
 
-Use the existing `ClickHouseDatabase` query path and centralize string escaping for the prefix even though server-generated prefixes are constrained.
+The literal prefix above is the test fixture example; production code substitutes only the run's validated server-generated prefix.
 
 - [ ] **Step 4: Implement truthful recent-event merge**
 
-Query the latest Oracle source events for the run by `ERROR_EVENT_ID DESC`, query ClickHouse rows for the same run IDs, and merge in Python keyed by `ID`.
-
-Pending row shape:
+Read the latest Oracle rows for the run and matching ClickHouse rows, merge by `ID`, and return rows with:
 
 ```python
 {
@@ -635,65 +505,61 @@ Pending row shape:
     "tin": "SIMTIN000042",
     "device_no": "SIMTIN000042_02",
     "return_code": "1600",
-    "return_msg": "Inventory shortage!",
-    "seller_reference_no": "...",
+    "seller_reference_no": "SIMTIN000042-INV-00001001",
     "oracle_committed": True,
     "clickhouse_received": False,
     "cdc_latency_ms": None,
+    "source_scn": None,
+    "source_commit_scn": None,
     "kafka_partition": None,
     "kafka_offset": None,
 }
 ```
 
-After arrival, populate `source_commit_ts`, `ingested_at`, `source_scn`, `source_commit_scn`, `kafka_partition`, `kafka_offset`, and calculated latency from the real ClickHouse row.
+When ClickHouse has the event, populate the real commit timestamp, SCNs, Kafka partition/offset, ingestion timestamp, and latency. Never synthesize those fields.
 
-- [ ] **Step 5: Implement stage health without Docker CLI dependencies**
+- [ ] **Step 5: Implement independent stage health**
 
-- Oracle: `SELECT 1 FROM DUAL` through `OracleDatabase`.
-- Debezium: standard-library HTTP GET to `${DEBEZIUM_URL}/connectors/${DEBEZIUM_FLAT_CONNECTOR}/status`; healthy only when connector and task 0 are `RUNNING`.
-- Kafka: parse `KAFKA_BOOTSTRAP` host/port and use `socket.create_connection(..., timeout=1.0)` as broker reachability for this POC; label it as broker reachability, not topic delivery proof.
-- ClickHouse: lightweight `SELECT 1` through the existing ClickHouse wrapper.
+- Oracle: `SELECT 1 FROM DUAL`.
+- Debezium: HTTP GET `${DEBEZIUM_URL}/connectors/${DEBEZIUM_FLAT_CONNECTOR}/status`; healthy only when connector and task 0 are `RUNNING`.
+- Kafka: `socket.create_connection()` to configured broker host/port with 1-second timeout; label result as broker reachability, not delivery proof.
+- ClickHouse: lightweight `SELECT 1` using the existing wrapper.
 
-Return data such as:
+Return each stage as `{status, detail}` where status is `healthy`, `degraded`, `unavailable`, or `unknown`.
 
-```python
-{
-    "oracle": {"status": "healthy", "detail": "Source reachable"},
-    "debezium": {"status": "healthy", "detail": "Connector and task RUNNING"},
-    "kafka": {"status": "healthy", "detail": "Broker reachable"},
-    "clickhouse": {"status": "healthy", "detail": "Analytics reachable"},
-}
-```
-
-- [ ] **Step 6: Add repository/service-level tests with fakes for reconciliation math**
-
-Tests must explicitly cover:
+- [ ] **Step 6: Write reconciliation tests**
 
 ```python
-assert in_flight == max(oracle_committed - clickhouse_received, 0)
-assert delivery_percent == 100.0 when oracle_committed == clickhouse_received == 840
-assert retry_events == error_events - affected_invoices
+# tests/test_simulator_service.py
+def test_reconciliation_math():
+    oracle_committed = 840
+    clickhouse_received = 812
+    in_flight = max(oracle_committed - clickhouse_received, 0)
+    delivery_percent = clickhouse_received / oracle_committed * 100
+    assert in_flight == 28
+    assert round(delivery_percent, 2) == 96.67
+
+
+def test_retry_math():
+    error_events = 840
+    affected_invoices = 751
+    assert error_events - affected_invoices == 89
 ```
 
-Also test partial delivery (`840` source, `812` destination -> `28` in flight) and analytics unavailable while source state remains readable.
+Add fakes that also verify analytics-unavailable behavior leaves worker/source state visible.
 
-- [ ] **Step 7: Run focused tests**
+- [ ] **Step 7: Verify and commit**
 
 ```bash
 pytest tests/test_simulator_service.py -q
 python -m compileall -q app
-```
-
-- [ ] **Step 8: Commit observability and configuration**
-
-```bash
 git add app/repositories/simulator.py app/config.py .env.example tests/test_simulator_service.py
 git commit -m "feat: add simulator CDC reconciliation metrics"
 ```
 
 ---
 
-### Task 5: Simulator Service, API Contracts and App Wiring
+### Task 4: Expose Simulator API and Run Lifecycle Service
 
 **Files:**
 - Create: `app/schemas/simulator.py`
@@ -712,51 +578,7 @@ git commit -m "feat: add simulator CDC reconciliation metrics"
 - `GET /api/simulator/runs/{run_id}/events?limit=40`
 - `GET /api/simulator/runs?limit=20`
 
-- [ ] **Step 1: Write failing API tests with a fake simulator service**
-
-```python
-# tests/test_simulator_api.py
-from fastapi.testclient import TestClient
-
-from app.main import create_app
-
-
-class FakeSimulatorService:
-    def __init__(self):
-        self.started = []
-
-    def start(self, payload):
-        self.started.append(payload)
-        return {"run_id": "EFR-TEST", "status": "starting"}
-
-    def status(self):
-        return {"active": None, "history": []}
-
-
-def test_start_simulation_returns_created_run(base_services):
-    service = FakeSimulatorService()
-    app = create_app(simulator_service=service, **base_services)
-    client = TestClient(app)
-    response = client.post("/api/simulator/runs", json={
-        "rate": 14,
-        "duration_seconds": 600,
-        "retry_probability": 0.12,
-    })
-    assert response.status_code == 201
-    assert response.json()["run_id"] == "EFR-TEST"
-```
-
-Use the repository's existing test helper/fake-service conventions when implementing `base_services`; if no shared fixture exists, define complete no-op fakes in this test file so `create_app()` never touches real Oracle/ClickHouse.
-
-- [ ] **Step 2: Run the API test and confirm failure**
-
-```bash
-pytest tests/test_simulator_api.py -q
-```
-
-Expected: missing simulator route/service injection.
-
-- [ ] **Step 3: Add strict Start request validation**
+- [ ] **Step 1: Add strict Start schema**
 
 ```python
 # app/schemas/simulator.py
@@ -769,9 +591,9 @@ class SimulatorStartRequest(BaseModel):
     retry_probability: float = Field(default=0.12, ge=0, le=1)
 ```
 
-The upper bounds are safety limits for the POC UI; they do not claim infrastructure capacity.
+These are POC safety bounds, not infrastructure-capacity claims.
 
-- [ ] **Step 4: Extend APIError with optional structured details and preserve existing callers**
+- [ ] **Step 2: Extend APIError with optional details**
 
 ```python
 class APIError(Exception):
@@ -783,61 +605,84 @@ class APIError(Exception):
         self.details = details or {}
 ```
 
-Update the handler in `app/main.py` to include `details` only when present. This enables `409 simulation_already_running` to return the active run metadata without breaking current error responses.
+Update `app/main.py` error handler to include `details` only when non-empty.
 
-- [ ] **Step 5: Implement SimulatorService orchestration and derived status**
+- [ ] **Step 3: Implement SimulatorService status composition**
 
-`SimulatorService.status()` must:
+`status()` must load active run, reconcile worker liveness, query Oracle/ClickHouse summaries, compute `in_flight` and `delivery_percent`, include health and recent events, and finalize `draining -> completed` when `clickhouse_received >= oracle_committed`.
 
-1. load the active run;
-2. reconcile dead/stale worker state;
-3. query exact Oracle/ClickHouse run metrics when a run exists;
-4. compute `in_flight`, `delivery_percent`, source progress and latency;
-5. if run status is `draining` and `clickhouse_received >= oracle_committed`, set `completed`, set `finished_at`, clear active pointer;
-6. include stage health and recent run history.
+Completed runs remain in history after the active pointer is cleared.
 
-A completed run must stay queryable from history after its active pointer is cleared.
-
-- [ ] **Step 6: Implement API routes with correct status codes and state errors**
-
-Example:
+- [ ] **Step 4: Implement API routes and duplicate-run error**
 
 ```python
-@router.post("/runs", status_code=status.HTTP_201_CREATED)
-def start_simulator(payload: SimulatorStartRequest, request: Request):
-    return service(request).start(payload)
+@router.post("/runs", status_code=201)
+def start_run(payload: SimulatorStartRequest, request: Request):
+    return simulator_service(request).start(payload)
 
 
 @router.get("/status")
-def simulator_status(request: Request):
-    return service(request).status()
+def status(request: Request):
+    return simulator_service(request).status()
 ```
 
-Map duplicate active-run creation to:
+Duplicate Start returns HTTP `409`:
 
 ```json
 {
   "error": "simulation_already_running",
   "message": "A simulation is already running.",
-  "details": {"active_run": {"run_id": "...", "status": "running"}}
+  "details": {
+    "active_run": {
+      "run_id": "EFR-20260806-084701-A1",
+      "status": "running"
+    }
+  }
 }
 ```
 
-- [ ] **Step 7: Wire default simulator dependencies in `app/main.py`**
+- [ ] **Step 5: Wire the service into `create_app()`**
 
-Add `default_simulator_service()` that builds `RunStore`, `SimulatorManager`, `SimulatorRepository`, Oracle/ClickHouse dependencies and settings. Extend `create_app(..., simulator_service=None)` and include `simulator_router`.
+Add `default_simulator_service()`, `simulator_service=None` injection, router include, and bump application version to `0.7.0`.
 
-Bump application version from `0.6.0` to `0.7.0`.
+- [ ] **Step 6: Write and run API tests**
 
-- [ ] **Step 8: Run all API-focused tests**
+```python
+# tests/test_simulator_api.py
+from fastapi.testclient import TestClient
+
+from app.main import create_app
+
+
+class FakeSimulatorService:
+    def start(self, payload):
+        return {"run_id": "EFR-TEST", "status": "starting"}
+
+    def status(self):
+        return {"active": None, "history": []}
+
+
+def test_start_returns_created_run(noop_services):
+    app = create_app(simulator_service=FakeSimulatorService(), **noop_services)
+    client = TestClient(app)
+    response = client.post("/api/simulator/runs", json={
+        "rate": 14,
+        "duration_seconds": 600,
+        "retry_probability": 0.12,
+    })
+    assert response.status_code == 201
+    assert response.json()["run_id"] == "EFR-TEST"
+```
+
+Define `noop_services` in the same test module or existing `conftest.py` as complete fake services for every other `create_app()` dependency so tests never touch real Oracle or ClickHouse.
+
+Run:
 
 ```bash
 pytest tests/test_simulator_api.py tests/test_simulator_service.py tests/test_simulator_manager.py -q
 ```
 
-Expected: all pass.
-
-- [ ] **Step 9: Commit API and service layer**
+- [ ] **Step 7: Commit API work**
 
 ```bash
 git add app/schemas/simulator.py app/services/simulator.py app/routes/simulator.py app/errors.py app/main.py tests/test_simulator_api.py
@@ -846,21 +691,18 @@ git commit -m "feat: expose simulator run control API"
 
 ---
 
-### Task 6: Build the Simulator Control Room Frontend
+### Task 5: Build the High-Quality Simulator Control Room UI
 
 **Files:**
 - Create: `app/static/js/simulator.js`
-- Modify: `app/static/js/app.js`
 - Modify: `app/static/js/api.js`
+- Modify: `app/static/js/app.js`
 - Modify: `app/static/css/app.css`
 
 **Interfaces:**
-- Consumes the Task 5 API contracts.
-- Produces `SimulatorPage` with `render()`, `destroy()`, visibility-aware polling, idle/running/paused/draining/completed/failed/stale renders, and Start/Pause/Resume/Stop actions.
+- Produces `SimulatorPage.render()`, `refresh()`, `destroy()`, idle/active/completed renderers, visibility-aware polling, and Start/Pause/Resume/Stop actions.
 
-- [ ] **Step 1: Preserve backend error code/details in the shared API helper**
-
-Update `app/static/js/api.js`:
+- [ ] **Step 1: Preserve backend error metadata in `api.js`**
 
 ```javascript
 if (!response.ok) {
@@ -872,33 +714,25 @@ if (!response.ok) {
 }
 ```
 
-This lets duplicate Start render the active-run recovery card rather than only a generic toast.
-
-- [ ] **Step 2: Wire SimulatorPage into SPA navigation**
-
-In `app/static/js/app.js`:
+- [ ] **Step 2: Wire Simulator navigation**
 
 ```javascript
 import { SimulatorPage } from "./simulator.js";
 ```
 
-and:
+and inside `navigate(page)`:
 
 ```javascript
-if(page === "simulator") {
+if (page === "simulator") {
   activePage = new SimulatorPage(shell);
   await activePage.render();
   return;
 }
 ```
 
-The sidebar button already exists in `index.html`; do not add another navigation item.
+The sidebar Simulator item already exists; do not duplicate it.
 
-- [ ] **Step 3: Implement refresh-safe page lifecycle and visibility-aware polling**
-
-`SimulatorPage.render()` must immediately draw a skeleton, call `/api/simulator/status`, and then choose idle or active-run rendering.
-
-Polling rules:
+- [ ] **Step 3: Implement refresh-safe polling lifecycle**
 
 ```javascript
 pollDelay() {
@@ -914,21 +748,13 @@ schedulePoll() {
 }
 ```
 
-On `visibilitychange`, refresh immediately when visible. `destroy()` clears timer and removes the visibility listener. Do not add `beforeunload`; refreshing is intentionally safe.
+On `visibilitychange`, immediately refresh when visible. `destroy()` removes the listener and timer. Do not add a `beforeunload` warning because browser refresh is intentionally safe.
 
-- [ ] **Step 4: Implement the idle configuration experience**
+- [ ] **Step 4: Implement idle configuration**
 
-Idle view must show:
+Show `14.00 events/sec`, `10 minutes`, `12% retries`, calculated expected events, `200 taxpayers`, `500 devices`, `20 stations`, `15 error codes`, architecture strip, and one primary **Start Simulation** action.
 
-- `14.00` events/sec default;
-- `10 minutes` default duration;
-- `12%` retry default;
-- live expected-event calculation;
-- population summary `200 taxpayers / 500 devices / 20 stations / 15 error codes`;
-- architecture strip `Oracle → Debezium → Kafka → ClickHouse`;
-- one clear **Start Simulation** primary action.
-
-Start button submits:
+Start submits:
 
 ```javascript
 await api("/api/simulator/runs", {
@@ -937,45 +763,39 @@ await api("/api/simulator/runs", {
 });
 ```
 
-Disable controls while the request is in flight.
+If `error.code === "simulation_already_running"`, show the returned active-run card and **View Active Simulation** instead of a generic error.
 
-If `error.code === "simulation_already_running"`, render the returned active-run card with **View Active Simulation** rather than an alarming error state.
+- [ ] **Step 5: Implement active-run hierarchy and controls**
 
-- [ ] **Step 5: Implement running/paused/draining/completed header and controls**
-
-The top region must prioritize:
+Header priority:
 
 ```text
-Run ID | status | elapsed | remaining | target rate | actual rate | progress
+Run ID | RUNNING/PAUSED/DRAINING | progress | elapsed | remaining | target rate | actual rate
 ```
 
 Controls:
 
-- `running`: Pause + Stop Run.
-- `paused`: Resume + Stop Run; helper text `Source generation is paused. CDC is still draining committed events.`
-- `draining`: no Resume/Start; helper text `Source generation has stopped. Waiting for committed events to arrive in ClickHouse.`
-- `completed`: Start New Run.
-- `failed/stale`: show diagnosis and Start New Run only after there is no active run.
+- running: **Pause**, **Stop Run**;
+- paused: **Resume**, **Stop Run**;
+- draining: no Resume/Start;
+- completed: **Start New Run**;
+- failed/stale: clear diagnostic copy and recovery action only after no active worker remains.
 
-Stop requires an application confirmation modal/drawer, not a browser `confirm()` dialog. Copy must explicitly say committed Oracle rows are retained and the run cannot resume after Stop.
+Stop uses an application drawer/modal, not browser `confirm()`. Copy states that committed Oracle rows remain and the run cannot resume after Stop.
 
-- [ ] **Step 6: Implement the primary reconciliation strip**
-
-Render three visually dominant values:
+- [ ] **Step 6: Implement dominant source-to-destination reconciliation**
 
 ```text
 ORACLE                 IN FLIGHT                 CLICKHOUSE
-3,463 committed   →        61        →           3,402 received
+3,463 committed   ->       61       ->           3,402 received
 14.02 / sec                                     98.2% delivered
 ```
 
-If Oracle exact count is temporarily unavailable, display worker-generated count with a clear `worker count` note rather than showing a fabricated exact source count.
+If Oracle exact count is temporarily unavailable, label the worker counter explicitly as a fallback rather than presenting it as an exact database count.
 
-- [ ] **Step 7: Implement health strip with text + icon + color**
+- [ ] **Step 7: Implement health strip and live event feed**
 
-Each stage card shows stage name, status icon/text, and detail. Color is supplementary, never the only state cue.
-
-Examples:
+Health cards always combine icon, text and color:
 
 ```text
 ✓ Oracle       HEALTHY      Source reachable
@@ -984,95 +804,52 @@ Examples:
 ✓ ClickHouse   HEALTHY      Analytics reachable
 ```
 
-- [ ] **Step 8: Implement live event feed without 14 DOM inserts/sec**
+Refresh recent events as a 25–40 row batch, not 14 DOM inserts per second. Pending events show `Oracle ✓ / Waiting for CDC`; arrived events show `ClickHouse ✓` and real latency. Expanded lineage shows SCNs and Kafka partition/offset only when present in ClickHouse.
 
-Refresh the latest 25–40 events as one batch on each status/event poll. Each compact row shows sequence, TIN, device, error code, seller reference, Oracle ✓, then either `Waiting for CDC…` or `ClickHouse ✓ 6.18s`.
+- [ ] **Step 8: Implement operational KPIs and charts**
 
-An expandable detail area may show `source_commit_ts`, SCN, commit SCN, Kafka partition/offset and `ingested_at` only when those fields are actually present.
+KPIs: Error Events, Affected Invoices, Retry Events, Taxpayers, Devices, Error Codes.
 
-- [ ] **Step 9: Implement operational charts and run KPIs**
+Visuals: recent source/arrival throughput and CDC latency summary emphasizing P50/P95, with P99/max secondary. Keep business-analysis charts on the existing EFRIS Errors page.
 
-Run KPIs:
+- [ ] **Step 9: Add responsive `.sim-*` CSS using existing design tokens**
 
-```text
-Error Events | Affected Invoices | Retry Events | Taxpayers | Devices | Error Codes
-```
+Use existing `--ura-blue`, `--ura-yellow`, `--success`, `--warning`, `--danger`, `--border`, `--surface`. Desktop favors a horizontal operations-console flow; tablet/mobile collapses cleanly. Status meaning must never depend on color alone. Avoid distracting continuous animation.
 
-Charts remain lightweight SVG/HTML consistent with the existing codebase:
-
-- source/arrival throughput over recent intervals;
-- latency summary emphasizing P50/P95 with P99/max secondary.
-
-Do not turn this page into a duplicate of `EFRIS Errors`; business analysis stays there.
-
-- [ ] **Step 10: Add responsive Control Room CSS using existing design tokens**
-
-Add `.sim-*` classes to `app/static/css/app.css` using existing variables such as `--ura-blue`, `--ura-yellow`, `--success`, `--warning`, `--danger`, `--border`, `--surface`.
-
-Desktop: reconciliation strip and health cards remain one-row where practical.
-
-Tablet/mobile: collapse to single-column cards, keep controls reachable, allow the event table to horizontally scroll only if required.
-
-Respect existing focus styles and add `:focus-visible` behavior for new custom buttons if any.
-
-Avoid continuous animations; only the running status dot may use a subtle pulse, and it must not be required to understand status.
-
-- [ ] **Step 11: Run JavaScript syntax and application compile checks**
+- [ ] **Step 10: Verify and commit frontend**
 
 ```bash
 node --check app/static/js/api.js
 node --check app/static/js/app.js
 node --check app/static/js/simulator.js
 python -m compileall -q app
-```
-
-Expected: all exit 0.
-
-- [ ] **Step 12: Commit the Control Room UI**
-
-```bash
 git add app/static/js/api.js app/static/js/app.js app/static/js/simulator.js app/static/css/app.css
 git commit -m "feat: add EFRIS simulator control room UI"
 ```
 
 ---
 
-### Task 7: Runtime Documentation, History UX and CLI Compatibility
+### Task 6: Documentation and Full RHEL Verification
 
 **Files:**
 - Modify: `simulation/README.md`
 - Modify: `docs/efris-error-monitor.md`
 - Modify: `.env.example`
-- Modify: `scripts/run_efris_simulator.py` if any final compatibility gaps remain
+- Test: full repository plus live RHEL verification.
 
-**Interfaces:**
-- Keeps CLI commands working for engineering diagnostics while browser-controlled mode becomes the demo default.
+- [ ] **Step 1: Document browser-controlled lifecycle and new settings**
 
-- [ ] **Step 1: Document browser mode and lifecycle**
-
-Add this explicit behavior to `simulation/README.md`:
+Document:
 
 ```text
-Browser Start → detached worker → Oracle source writes
-Browser refresh/navigation/tab closure → no effect on worker
-Pause → no new Oracle commits, downstream keeps draining
-Resume → same run ID/source prefix and next event sequence
-Stop → generation ends permanently, state becomes Draining until ClickHouse reconciles
+Browser Start -> detached worker -> Oracle source writes
+Refresh/navigation/tab closure -> worker continues
+Pause -> source stops, CDC drains
+Resume -> same run and next sequence
+Stop -> Draining -> Completed after reconciliation
 ```
 
-Include API endpoints and runtime state location. State files contain no secrets.
-
-- [ ] **Step 2: Document new `.env` requirements for a new terminal/app process**
-
-Keep the source connection keys:
-
-```text
-CDC_APP_USER=CDC_APP
-CDC_APP_PASSWORD=<local secret only>
-CDC_APP_DSN=localhost:1521/FREEPDB1
-```
-
-and non-secret control-room settings:
+`.env.example` contains only non-secret/default entries:
 
 ```text
 DEBEZIUM_URL=http://localhost:8083
@@ -1082,56 +859,29 @@ SIMULATOR_RUNTIME_DIR=runtime/simulator
 SIMULATOR_STALE_SECONDS=10
 ```
 
-Do not add real passwords.
+Keep `CDC_APP_PASSWORD=` blank.
 
-- [ ] **Step 3: Update EFRIS monitor documentation with the proven baseline and new control flow**
+- [ ] **Step 2: Record the already-proven pre-Control-Room baseline accurately**
 
-Record the already-observed baseline separately from future tests:
+In `docs/efris-error-monitor.md`, record:
 
 ```text
-One-minute source test:
-841 source commits produced by the pre-control-room CLI boundary behavior
+Pre-Control-Room one-minute run:
+841 commits from the old elapsed-time boundary loop
 14.02 events/sec
 0 source failures
-841 ClickHouse rows received
-90 retry events
-188 taxpayers represented
-335 devices represented
-P50 CDC latency 6362 ms
-P95 CDC latency 9914 ms
-P99 CDC latency 10938 ms
+841 ClickHouse rows
+90 retries
+188 taxpayers
+335 devices
+P50 6362 ms
+P95 9914 ms
+P99 10938 ms
 ```
 
-Explain that the refactored finite-run engine intentionally uses exact target-event count, so future `14 × 60` finite runs should produce exactly `840` events.
+Also state that the refactored finite engine deliberately changes the count boundary so new one-minute runs target exactly `840`.
 
-- [ ] **Step 4: Confirm CLI compatibility**
-
-```bash
-python scripts/run_efris_simulator.py --help
-python -m compileall -q scripts app
-```
-
-Do not run another 14/sec source workload as part of this documentation step.
-
-- [ ] **Step 5: Commit docs and compatibility updates**
-
-```bash
-git add simulation/README.md docs/efris-error-monitor.md .env.example scripts/run_efris_simulator.py
-git commit -m "docs: document browser-controlled EFRIS simulation"
-```
-
----
-
-### Task 8: Full Test Pass and RHEL End-to-End Verification
-
-**Files:**
-- Modify only files proven necessary by failures discovered during this verification task.
-- Test: all simulator tests plus existing project tests.
-
-**Interfaces:**
-- Produces a runtime-verified Simulator Control Room ready for the 10-minute demo workload.
-
-- [ ] **Step 1: Run the full automated test and syntax suite**
+- [ ] **Step 3: Run the complete automated suite**
 
 ```bash
 pytest -q
@@ -1142,107 +892,47 @@ node --check app/static/js/simulator.js
 node --check app/static/js/efris_errors.js
 ```
 
-Expected: all tests/syntax checks pass.
+Expected: every command exits 0.
 
-- [ ] **Step 2: Pull the implementation on the RHEL POC host and load environment safely**
+- [ ] **Step 4: Run a 60-second browser test and refresh mid-run**
+
+Use `14 events/sec`, `60 seconds`, `12% retry`, expected `840`.
+
+Verify RUNNING state, refresh at approximately 15–20 seconds, reconnect to the same run ID, navigate away/back, and finish at exactly 840 successful source commits if there are no source failures.
+
+- [ ] **Step 5: Verify Pause/Resume in a second short run**
+
+While paused, Oracle committed count stops, ClickHouse continues draining, and active elapsed time stops. Resume keeps the same run/source prefix and sequence and does not burst above the requested rate to compensate for paused time.
+
+- [ ] **Step 6: Verify Stop -> Draining -> Completed**
+
+Stop before target. Confirm no further Oracle source rows, DRAINING status, ClickHouse catches up, then COMPLETED when counts reconcile. Confirm the completed run remains in history and a new run can start.
+
+- [ ] **Step 7: Verify duplicate Start protection from a second browser**
+
+Expected: HTTP 409 `simulation_already_running`, active-run metadata shown, no second worker PID created.
+
+- [ ] **Step 8: Reconcile the browser run directly in ClickHouse without manual prefix typing**
+
+Extract the most recent run prefix from persisted history:
 
 ```bash
-cd /home/jkasule/cdc-clickhouse-poc
-source venv/bin/activate
-set -a
-source .env
-set +a
-```
+RUN_PREFIX=$(python3 - <<'PY'
+import json
+from pathlib import Path
 
-Verify without printing the password:
-
-```bash
-python3 - <<'PY'
-import os
-print("USER:", os.getenv("CDC_APP_USER"))
-print("DSN :", os.getenv("CDC_APP_DSN"))
-print("PASS:", "SET" if os.getenv("CDC_APP_PASSWORD") else "MISSING")
+runs = sorted(Path("runtime/simulator/runs").glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+with runs[0].open() as handle:
+    print(json.load(handle)["source_prefix"])
 PY
+)
+echo "Run prefix: $RUN_PREFIX"
 ```
 
-- [ ] **Step 3: Start/restart FastAPI and open Simulator**
-
-Use the existing application launch method for this POC. If running manually:
+Then run ClickHouse using the shell variable:
 
 ```bash
-uvicorn app.main:app --host 0.0.0.0 --port 8000
-```
-
-Open **Simulator** from the existing SYSTEM sidebar.
-
-- [ ] **Step 4: Run a 60-second browser test at 14/sec and refresh mid-run**
-
-Configure:
-
-```text
-Rate: 14 events/sec
-Duration: 60 seconds
-Retry: 12%
-Expected source events: 840
-```
-
-During the run:
-
-1. verify status becomes RUNNING;
-2. refresh the browser around 15–20 seconds;
-3. verify the page says it reconnected to the same run ID;
-4. verify the source counter continues through the refresh;
-5. navigate to EFRIS Errors and back to Simulator;
-6. verify same run remains active.
-
-Expected final source count: exactly `840` successful Oracle commits.
-
-- [ ] **Step 5: Verify Pause/Resume semantics in a second short run**
-
-Start another finite run, Pause after approximately 10 seconds, and verify:
-
-```text
-Oracle committed count: stops increasing
-ClickHouse received: continues increasing until in-flight approaches 0
-Active elapsed time: stops advancing while paused
-```
-
-Resume and verify:
-
-```text
-same run_id
-same source_prefix
-next source sequence continues without reset
-no catch-up burst above the requested rate caused by paused time
-```
-
-- [ ] **Step 6: Verify Stop → Draining → Completed**
-
-Stop before the run reaches its target. Confirm:
-
-1. no new Oracle run-prefix rows are generated after Stop;
-2. UI status becomes DRAINING;
-3. ClickHouse count continues catching up;
-4. once `clickhouse_received == oracle_committed`, UI becomes COMPLETED;
-5. completed run remains visible in history;
-6. a new run can now be started.
-
-- [ ] **Step 7: Verify second-browser duplicate Start protection**
-
-While a run is active, open another browser/session and press Start. Expected:
-
-```text
-HTTP 409 simulation_already_running
-UI shows active run metadata
-View Active Simulation action reconnects to the existing run
-no second worker process is launched
-```
-
-- [ ] **Step 8: Verify truthful run analytics and lineage against ClickHouse**
-
-For the browser-generated run prefix, compare UI counts to ClickHouse:
-
-```sql
+sudo docker exec poc-clickhouse clickhouse-client --user kjt --database analytics --query "
 SELECT
     count() AS error_events,
     uniqExact(tuple(tin, seller_reference_no)) AS affected_invoices,
@@ -1250,35 +940,29 @@ SELECT
     uniqExact(tin) AS taxpayers,
     uniqExact(device_no) AS devices,
     uniqExact(return_code) AS error_codes
-FROM analytics.raw_efris_error_log
-WHERE startsWith(ifNull(id, ''), '<RUN_SOURCE_PREFIX>-');
+FROM raw_efris_error_log
+WHERE startsWith(ifNull(id, ''), '${RUN_PREFIX}-')"
 ```
 
 Latency:
 
-```sql
+```bash
+sudo docker exec poc-clickhouse clickhouse-client --user kjt --database analytics --query "
 SELECT
     round(avg(dateDiff('millisecond', source_commit_ts, ingested_at)), 2) AS avg_ms,
     quantileExact(0.50)(dateDiff('millisecond', source_commit_ts, ingested_at)) AS p50_ms,
     quantileExact(0.95)(dateDiff('millisecond', source_commit_ts, ingested_at)) AS p95_ms,
     quantileExact(0.99)(dateDiff('millisecond', source_commit_ts, ingested_at)) AS p99_ms,
     max(dateDiff('millisecond', source_commit_ts, ingested_at)) AS max_ms
-FROM analytics.raw_efris_error_log
-WHERE startsWith(ifNull(id, ''), '<RUN_SOURCE_PREFIX>-');
+FROM raw_efris_error_log
+WHERE startsWith(ifNull(id, ''), '${RUN_PREFIX}-')"
 ```
 
-Replace `<RUN_SOURCE_PREFIX>` with the source prefix displayed by the UI for the run under test.
+UI values must match these queries.
 
-- [ ] **Step 9: Run the final 10-minute demonstration workload from the UI**
+- [ ] **Step 9: Run the final 10-minute browser demo**
 
-Only after Steps 1–8 pass:
-
-```text
-Rate: 14 events/sec
-Duration: 600 seconds
-Retry: 12%
-Target: 8,400 exact Oracle commits
-```
+Use `14 events/sec`, `600 seconds`, `12% retry`, target `8,400`.
 
 Success criteria:
 
@@ -1287,50 +971,24 @@ Oracle committed       8,400
 Source failures        0
 ClickHouse received    8,400 after drain
 Missing after drain    0
-No steadily increasing latency/backlog trend
 Browser refresh        safe
-Pause/Resume           proven in prior test
 Duplicate Start        prevented
+No steadily growing CDC backlog
 ```
 
-- [ ] **Step 10: Commit any verification-only fixes, then record final evidence in PR #2**
-
-If verification required fixes, commit only the tested corrections:
+- [ ] **Step 10: Commit documentation and add verified evidence to PR #2**
 
 ```bash
-git add <exact-fixed-files>
-git commit -m "fix: harden simulator control room runtime behavior"
+git add simulation/README.md docs/efris-error-monitor.md .env.example
+git commit -m "docs: document browser-controlled EFRIS simulation"
 ```
 
-Then add a PR comment summarizing automated tests, 60-second browser run, refresh reconnect, Pause/Resume, Stop/Drain, duplicate-Start protection, and final 10-minute reconciliation. Do not claim a check passed unless its output was actually observed.
+Add a PR #2 comment only with results actually observed: automated tests, 60-second browser run, refresh reconnect, Pause/Resume, Stop/Drain, duplicate Start, and 10-minute reconciliation.
 
 ---
 
-## Plan Self-Review
+## Self-Review
 
-### Spec coverage
-
-- Refresh/navigation safety: Tasks 3, 5, 6, 8.
-- One active run only: Tasks 2, 3, 5, 6, 8.
-- Pause/Resume/Stop semantics: Tasks 3, 5, 6, 8.
-- Durable run identity and sequence: Tasks 1, 2, 3, 8.
-- Oracle-only source writes: Tasks 1, 3, 8.
-- Exact Oracle vs ClickHouse reconciliation: Tasks 4, 5, 6, 8.
-- Truthful intermediate-stage presentation: Tasks 4 and 6.
-- Live events and lineage: Tasks 4 and 6.
-- Run analytics and CDC latency: Tasks 4, 5, 6, 8.
-- Pipeline health: Tasks 4 and 6.
-- Completed-run history: Tasks 2, 5, 6, 8.
-- Stale worker detection: Tasks 3 and 5.
-- UI/UX quality and responsive behavior: Task 6.
-- CLI reuse rather than duplicated generation logic: Tasks 1 and 7.
-- No extra infrastructure dependencies: maintained throughout.
-- 14/sec exact 60-second and 10-minute runtime verification: Task 8.
-
-### Placeholder scan
-
-The implementation tasks contain no intended `TBD`/`TODO` work. One illustrative test step explicitly instructs the implementer to replace an ellipsis before committing; the committed test must contain the complete fixture and assertions described in that step.
-
-### Type/interface consistency
-
-`RunConfig`, `RunRecord`, `RunStore`, `SimulatorManager`, `SimulatorRepository`, and `SimulatorService` names are used consistently across tasks. Run commands are `run|pause|stop`; actual run statuses are `starting|running|paused|draining|completed|failed|stale`. The source prefix is stable for the entire run and is the join/filter key used by Oracle, ClickHouse, the API and the UI.
+- Spec coverage: refresh safety, detached worker, one active run, Pause/Resume/Stop, durable identity, exact source/destination reconciliation, live lineage, CDC latency, health, history, responsive UX, and 14/sec verification all map to Tasks 1–6.
+- Placeholder scan: no `TBD`, `TODO`, incomplete fixture, or manual filename placeholder remains. Runtime-dependent run prefixes are read automatically from persisted state in Task 6.
+- Type consistency: `RunConfig`, `RunRecord`, `RunStore`, `SimulatorManager`, repository, service, API, and frontend all use the same run states and stable `source_prefix` join key.
