@@ -213,6 +213,9 @@ debezium/oracle-cdc-flat.json
 simulation/generated_taxpayers.json
 simulation/generated_devices.json
 
+# EFRIS simulator server-side runtime state
+runtime/simulator/
+
 # Python environments/cache
 .venv/
 venv/
