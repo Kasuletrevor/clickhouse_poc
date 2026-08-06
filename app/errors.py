@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+
 class APIError(Exception):
     def __init__(
         self,
