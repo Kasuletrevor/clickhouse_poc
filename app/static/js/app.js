@@ -1,7 +1,7 @@
 import { DashboardPage } from "./dashboard.js";
 import { EfrisErrorsPage } from "./efris_errors.js";
 import { PaymentsPage } from "./payments.js";
-import { SimulatorPage } from "./simulator.js";
+import { SimulatorPage } from "./simulator_controller.js";
 import { StationsPage } from "./stations.js";
 import { TaxpayersPage } from "./taxpayers.js";
 
@@ -27,7 +27,7 @@ async function navigate(page){
   shell.closeDrawer();
   if(page==="dashboard") { activePage = new DashboardPage(shell); await activePage.render(); return; }
   if(page==="payments") { activePage = new PaymentsPage(shell); await activePage.render(); return; }
-  if(page==="taxpayers") { activePage = new TaxpayersPage(shell); await activePage.render(); return; }
+  if(page==="taxpayers") { activePage = new TaxpayerPage(shell); await activePage.render(); return; }
   if(page==="stations") { activePage = new StationsPage(shell); await activePage.render(); return; }
   if(page==="efris-errors") { activePage = new EfrisErrorsPage(shell); await activePage.render(); return; }
   if(page==="simulator") { activePage = new SimulatorPage(shell); await activePage.render(); return; }
