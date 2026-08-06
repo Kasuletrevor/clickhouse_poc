@@ -39,6 +39,12 @@ class SimulatorService:
                 "A simulation is already running.",
                 {"active_run": self._record_view(exc.active_run)},
             ) from exc
+        except RuntimeError as exc:
+            raise APIError(
+                500,
+                "simulation_start_failed",
+                "The simulator worker could not be started. Check the server-side simulator log for this run.",
+            ) from exc
         return self._record_view(run)
 
     def _control(self, run_id: str, operation: str) -> dict:
