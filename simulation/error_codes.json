@@ -1,0 +1,77 @@
+[
+  {
+    "code": "3077",
+    "message": "buyerDetails-->buyerTin: If 'buyerType' is '0', and 'InvoiceIndustry' is '101', and 'nonResidentFlag' is '0', 'buyerTin' cannot be empty!",
+    "weight": 14
+  },
+  {
+    "code": "1600",
+    "message": "Inventory shortage!",
+    "weight": 18
+  },
+  {
+    "code": "2249",
+    "message": "buyerDetails-->buyerTin: Buyer's tin does not exist!",
+    "weight": 12
+  },
+  {
+    "code": "2253",
+    "message": "Invoice(s)/receipt(s) with the same Seller's Reference Number have already been issued!",
+    "weight": 10
+  },
+  {
+    "code": "3083",
+    "message": "The buyer is not allowed to issue B2G invoice.",
+    "weight": 6
+  },
+  {
+    "code": "2839",
+    "message": "The buyer TIN relates to Non-individual. Please use customer type as Business to complete this transaction!",
+    "weight": 6
+  },
+  {
+    "code": "2785",
+    "message": "Tax Amount in the Tax Details(Section E: Tax Details) cannot be less than the sum Tax in the Goods Details(Section D: Goods & Services Details)!",
+    "weight": 7
+  },
+  {
+    "code": "2123",
+    "message": "goodsDetails-->itemCode: Item code and Name are not matching with URA.",
+    "weight": 5
+  },
+  {
+    "code": "1332",
+    "message": "goodsDetails-->taxRate: The tax rate for this product is not tax-exempt!",
+    "weight": 5
+  },
+  {
+    "code": "2833",
+    "message": "taxDetails-->taxRate: If 'taxCategoryCode' is '02', 'taxRate' must be '0'!",
+    "weight": 4
+  },
+  {
+    "code": "1304",
+    "message": "summary-->itemCount: Must match the Number of all product lines in goodsDetail-number of discount lines!",
+    "weight": 3
+  },
+  {
+    "code": "2122",
+    "message": "goodsDetails-->itemCode: Item code and Name is not configured with URA. Complete the configuration process for this item.",
+    "weight": 3
+  },
+  {
+    "code": "2848",
+    "message": "goodsDetails-->exciseFlag: This product is configured as excise duty, 'exciseFlag' must be '1'!",
+    "weight": 3
+  },
+  {
+    "code": "3082",
+    "message": "buyerDetails-->buyerTin: If 'buyerType' is 'B2G', 'buyerTin' cannot be empty.",
+    "weight": 2
+  },
+  {
+    "code": "3043",
+    "message": "goodsDetails-->vatProjectId: Deemed/Exempt Project is invalid.",
+    "weight": 2
+  }
+]

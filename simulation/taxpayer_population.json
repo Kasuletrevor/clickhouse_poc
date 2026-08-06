@@ -1,0 +1,50 @@
+{
+  "seed": 20260806,
+  "taxpayer_count": 200,
+  "taxpayer_id_prefix": "SIMTIN",
+  "taxpayer_type": "COMPANY",
+  "name_prefixes": [
+    "Acacia", "Nile", "Victoria", "Rwenzori", "Pearl", "Crest", "Savanna", "Lakeview", "Equator", "Kampala",
+    "Bukoto", "Kintu", "Murchison", "Elgon", "Kagera", "Bunyoro", "Busoga", "Acholi", "Ankole", "Buganda"
+  ],
+  "business_activities": [
+    "Trading", "Supplies", "Logistics", "Foods", "Pharma", "Hardware", "Textiles", "Engineering", "Retail", "Motors",
+    "Agro", "Telecom", "Energy", "Services", "Distributors", "Manufacturing", "Enterprises", "Holdings", "Solutions", "Industries"
+  ],
+  "name_suffixes": ["Ltd", "Uganda Ltd", "Company Ltd", "Enterprises Ltd"],
+  "station_distribution": [
+    {"station_id":"SIM01","weight":12},
+    {"station_id":"SIM02","weight":10},
+    {"station_id":"SIM03","weight":8},
+    {"station_id":"SIM04","weight":8},
+    {"station_id":"SIM05","weight":5},
+    {"station_id":"SIM06","weight":5},
+    {"station_id":"SIM07","weight":6},
+    {"station_id":"SIM08","weight":5},
+    {"station_id":"SIM09","weight":3},
+    {"station_id":"SIM10","weight":3},
+    {"station_id":"SIM11","weight":7},
+    {"station_id":"SIM12","weight":5},
+    {"station_id":"SIM13","weight":4},
+    {"station_id":"SIM14","weight":3},
+    {"station_id":"SIM15","weight":2},
+    {"station_id":"SIM16","weight":5},
+    {"station_id":"SIM17","weight":4},
+    {"station_id":"SIM18","weight":3},
+    {"station_id":"SIM19","weight":3},
+    {"station_id":"SIM20","weight":1}
+  ],
+  "devices": {
+    "target_count": 500,
+    "types": [
+      {"name":"ERP","weight":40},
+      {"name":"POS","weight":30},
+      {"name":"API","weight":20},
+      {"name":"EFD","weight":10}
+    ],
+    "traffic_weight_min": 1,
+    "traffic_weight_max": 8
+  },
+  "taxpayer_traffic_weight_min": 1,
+  "taxpayer_traffic_weight_max": 10
+}

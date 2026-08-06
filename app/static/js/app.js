@@ -1,5 +1,7 @@
 import { DashboardPage } from "./dashboard.js";
+import { EfrisErrorsPage } from "./efris_errors.js";
 import { PaymentsPage } from "./payments.js";
+import { SimulatorPage } from "./simulator_controller.js";
 import { StationsPage } from "./stations.js";
 import { TaxpayersPage } from "./taxpayers.js";
 
@@ -14,7 +16,7 @@ const shell = {
 };
 shell.backdrop.onclick = () => shell.closeDrawer();
 
-const titles={dashboard:"Dashboard",taxpayers:"Taxpayers",stations:"Stations",payments:"Payments",reports:"Reports",pipeline:"Pipeline Health",events:"Event Monitor",simulator:"Simulator"};
+const titles={dashboard:"Dashboard",taxpayers:"Taxpayers",stations:"Stations",payments:"Payments","efris-errors":"EFRIS Errors",reports:"Reports",pipeline:"Pipeline Health",events:"Event Monitor",simulator:"Simulator"};
 let activePage = null;
 
 async function navigate(page){
@@ -27,6 +29,8 @@ async function navigate(page){
   if(page==="payments") { activePage = new PaymentsPage(shell); await activePage.render(); return; }
   if(page==="taxpayers") { activePage = new TaxpayersPage(shell); await activePage.render(); return; }
   if(page==="stations") { activePage = new StationsPage(shell); await activePage.render(); return; }
+  if(page==="efris-errors") { activePage = new EfrisErrorsPage(shell); await activePage.render(); return; }
+  if(page==="simulator") { activePage = new SimulatorPage(shell); await activePage.render(); return; }
   shell.content.innerHTML=`<div class="placeholder"><p class="eyebrow">Planned module</p><h2>${titles[page]}</h2><p>This module is part of the approved implementation plan and will be added in the next vertical slices.</p></div>`;
 }
 document.querySelectorAll(".nav-item").forEach(btn=>btn.onclick=()=>navigate(btn.dataset.page));
