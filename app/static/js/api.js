@@ -5,7 +5,11 @@ export async function api(path, options = {}) {
   });
   const data = response.status === 204 ? null : await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(data.message || "The request could not be completed.");
+    const error = new Error(data.message || "The request could not be completed.");
+    error.code = data.error || "request_failed";
+    error.details = data.details || {};
+    error.status = response.status;
+    throw error;
   }
   return data;
 }
