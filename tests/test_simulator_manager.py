@@ -31,3 +31,13 @@ def test_pause_resume_stop_use_commands(tmp_path):
     assert manager.resume("EFR-1").command == "run"
     store.set_fields("EFR-1", status="running")
     assert manager.stop("EFR-1").command == "stop"
+
+
+def test_stop_is_allowed_while_worker_is_still_starting(tmp_path):
+    store = RunStore(tmp_path)
+    run = RunRecord("EFR-START", "SSTART", "starting", "run", 14, 60, 840, 0.12, 1, pid=123)
+    store.create_run(run)
+    manager = SimulatorManager(store, pid_probe=lambda _: True)
+    stopped = manager.stop("EFR-START")
+    assert stopped.status == "starting"
+    assert stopped.command == "stop"
