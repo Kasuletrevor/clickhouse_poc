@@ -25,9 +25,6 @@ def run_worker(run_id: str) -> None:
         runtime_dir = PROJECT_ROOT / runtime_dir
     store = RunStore(runtime_dir)
     record = store.get_run(run_id)
-    db = OracleDatabase(settings)
-    factory = EfrisEventFactory(SIM_DIR, record.source_prefix, record.random_seed, record.retry_probability)
-    pacer = RatePacer(record.rate)
     started_mono = time.perf_counter()
     paused_total = float(record.paused_seconds)
     pause_started = None
@@ -39,6 +36,14 @@ def run_worker(run_id: str) -> None:
         return max(0.0, now - started_mono - paused_total - current_pause)
 
     try:
+        db = OracleDatabase(settings)
+        factory = EfrisEventFactory(
+            SIM_DIR,
+            record.source_prefix,
+            record.random_seed,
+            record.retry_probability,
+        )
+        pacer = RatePacer(record.rate)
         with db.connection() as conn:
             with conn.cursor() as cursor:
                 store.set_fields(run_id, status="running", command="run", last_heartbeat=utc_now_iso())
@@ -47,19 +52,38 @@ def run_worker(run_id: str) -> None:
                     now = time.perf_counter()
 
                     if current.command == "stop":
-                        store.set_fields(run_id, status="draining", active_elapsed_seconds=active_elapsed(now), last_heartbeat=utc_now_iso())
+                        store.set_fields(
+                            run_id,
+                            status="draining",
+                            active_elapsed_seconds=active_elapsed(now),
+                            last_heartbeat=utc_now_iso(),
+                        )
                         break
 
                     if current.target_events is not None and current.generated >= current.target_events:
-                        store.set_fields(run_id, status="draining", active_elapsed_seconds=active_elapsed(now), last_heartbeat=utc_now_iso())
+                        store.set_fields(
+                            run_id,
+                            status="draining",
+                            active_elapsed_seconds=active_elapsed(now),
+                            last_heartbeat=utc_now_iso(),
+                        )
                         break
 
                     if current.command == "pause":
                         if pause_started is None:
                             pause_started = now
-                            store.set_fields(run_id, status="paused", active_elapsed_seconds=active_elapsed(now), last_heartbeat=utc_now_iso())
+                            store.set_fields(
+                                run_id,
+                                status="paused",
+                                active_elapsed_seconds=active_elapsed(now),
+                                last_heartbeat=utc_now_iso(),
+                            )
                         else:
-                            store.set_fields(run_id, last_heartbeat=utc_now_iso(), active_elapsed_seconds=active_elapsed(now))
+                            store.set_fields(
+                                run_id,
+                                last_heartbeat=utc_now_iso(),
+                                active_elapsed_seconds=active_elapsed(now),
+                            )
                         time.sleep(0.2)
                         continue
 
@@ -67,7 +91,12 @@ def run_worker(run_id: str) -> None:
                         paused_total += now - pause_started
                         pause_started = None
                         pacer.reset()
-                        store.set_fields(run_id, status="running", paused_seconds=paused_total, last_heartbeat=utc_now_iso())
+                        store.set_fields(
+                            run_id,
+                            status="running",
+                            paused_seconds=paused_total,
+                            last_heartbeat=utc_now_iso(),
+                        )
 
                     pacer.wait_next()
                     current = store.get_run(run_id)
@@ -88,7 +117,13 @@ def run_worker(run_id: str) -> None:
                     if now - last_sample_time >= 1.0:
                         sample_elapsed = max(now - last_sample_time, 0.000001)
                         sample_rate = (next_generated - last_sample_count) / sample_elapsed
-                        samples.append({"at": utc_now_iso(), "rate": round(sample_rate, 3), "generated": next_generated})
+                        samples.append(
+                            {
+                                "at": utc_now_iso(),
+                                "rate": round(sample_rate, 3),
+                                "generated": next_generated,
+                            }
+                        )
                         samples = samples[-120:]
                         last_sample_time = now
                         last_sample_count = next_generated
