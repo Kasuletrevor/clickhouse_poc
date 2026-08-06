@@ -46,7 +46,16 @@ def run_worker(run_id: str) -> None:
         pacer = RatePacer(record.rate)
         with db.connection() as conn:
             with conn.cursor() as cursor:
-                store.set_fields(run_id, status="running", command="run", last_heartbeat=utc_now_iso())
+                current = store.get_run(run_id)
+                if current.command == "stop":
+                    store.set_fields(
+                        run_id,
+                        status="draining",
+                        active_elapsed_seconds=0.0,
+                        last_heartbeat=utc_now_iso(),
+                    )
+                    return
+                store.set_fields(run_id, status="running", last_heartbeat=utc_now_iso())
                 while True:
                     current = store.get_run(run_id)
                     now = time.perf_counter()
