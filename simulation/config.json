@@ -1,0 +1,12 @@
+{
+  "target_events_per_second": 14,
+  "duration_seconds": 600,
+  "report_interval_seconds": 5,
+  "retry_probability": 0.12,
+  "recent_reference_pool": 5000,
+  "currency": "UGX",
+  "gross_amount_min": 50000,
+  "gross_amount_max": 5000000,
+  "create_user_id": "POC_SIMULATOR",
+  "random_seed": 20260806
+}
