@@ -13,21 +13,27 @@ from app.repositories.dashboard import DashboardRepository
 from app.repositories.efris_errors import EfrisErrorRepository
 from app.repositories.efris_events import OracleEfrisEventRepository
 from app.repositories.payments import OraclePaymentRepository
+from app.repositories.simulator import SimulatorRepository
 from app.repositories.stations import OracleStationRepository
 from app.repositories.taxpayers import OracleTaxpayerRepository
 from app.routes.dashboard import router as dashboard_router
 from app.routes.efris_errors import router as efris_errors_router
 from app.routes.payments import router as payments_router
+from app.routes.simulator import router as simulator_router
 from app.routes.stations import router as stations_router
 from app.routes.taxpayers import router as taxpayers_router
 from app.services.dashboard import DashboardService
 from app.services.efris_errors import EfrisErrorService
 from app.services.efris_events import EfrisEventService
 from app.services.payments import PaymentService
+from app.services.simulator import SimulatorService
 from app.services.stations import StationService
 from app.services.taxpayers import TaxpayerService
+from app.simulator.manager import SimulatorManager
+from app.simulator.store import RunStore
 
 BASE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = BASE_DIR.parent
 
 
 def default_payment_service() -> PaymentService:
@@ -60,6 +66,25 @@ def default_efris_event_service() -> EfrisEventService:
     return EfrisEventService(OracleEfrisEventRepository(db))
 
 
+def default_simulator_service() -> SimulatorService:
+    settings = get_settings()
+    runtime_dir = Path(settings.simulator_runtime_dir)
+    if not runtime_dir.is_absolute():
+        runtime_dir = PROJECT_ROOT / runtime_dir
+    store = RunStore(runtime_dir)
+    manager = SimulatorManager(
+        store,
+        stale_seconds=settings.simulator_stale_seconds,
+        project_root=PROJECT_ROOT,
+    )
+    repository = SimulatorRepository(
+        OracleDatabase(settings),
+        ClickHouseDatabase(settings),
+        settings,
+    )
+    return SimulatorService(store, manager, repository)
+
+
 def create_app(
     payment_service=None,
     taxpayer_service=None,
@@ -67,14 +92,16 @@ def create_app(
     dashboard_service=None,
     efris_error_service=None,
     efris_event_service=None,
+    simulator_service=None,
 ) -> FastAPI:
-    app = FastAPI(title="Internal Transaction Application", version="0.6.0")
+    app = FastAPI(title="Internal Transaction Application", version="0.7.0")
     app.state.payment_service = payment_service or default_payment_service()
     app.state.taxpayer_service = taxpayer_service or default_taxpayer_service()
     app.state.station_service = station_service or default_station_service()
     app.state.dashboard_service = dashboard_service or default_dashboard_service()
     app.state.efris_error_service = efris_error_service or default_efris_error_service()
     app.state.efris_event_service = efris_event_service or default_efris_event_service()
+    app.state.simulator_service = simulator_service or default_simulator_service()
     app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
     templates = Jinja2Templates(directory=BASE_DIR / "templates")
     app.include_router(dashboard_router)
@@ -82,10 +109,14 @@ def create_app(
     app.include_router(payments_router)
     app.include_router(taxpayers_router)
     app.include_router(stations_router)
+    app.include_router(simulator_router)
 
     @app.exception_handler(APIError)
     async def api_error_handler(_request: Request, exc: APIError):
-        return JSONResponse(status_code=exc.status_code, content={"error": exc.code, "message": exc.message})
+        payload = {"error": exc.code, "message": exc.message}
+        if exc.details:
+            payload["details"] = exc.details
+        return JSONResponse(status_code=exc.status_code, content=payload)
 
     @app.exception_handler(SourceUnavailableError)
     async def source_unavailable_handler(_request: Request, _exc: SourceUnavailableError):
