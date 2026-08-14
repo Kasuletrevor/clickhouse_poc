@@ -1,31 +1,40 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CLICKHOUSE_CONTAINER="${CLICKHOUSE_CONTAINER:-poc-clickhouse}"
-CONFIG_FILE="${CONFIG_FILE:-clickhouse/config.d/efris_kafka_earliest.xml}"
-TARGET_FILE="/etc/clickhouse-server/config.d/efris_kafka_earliest.xml"
+KAFKA_CONTAINER="${KAFKA_CONTAINER:-poc-kafka}"
+KAFKA_BOOTSTRAP="${KAFKA_BOOTSTRAP:-kafka:19092}"
+EFRIS_TOPIC="${EFRIS_TOPIC:-EAI_Efris}"
+EFRIS_GROUP="${EFRIS_GROUP:-clickhouse-efris-esb-poc-v1}"
 
-if [[ ! -f "$CONFIG_FILE" ]]; then
-  echo "Missing $CONFIG_FILE" >&2
-  exit 1
+echo 'No ClickHouse server configuration or restart is required.'
+echo 'Checking retained topic offsets before the new ClickHouse consumer is attached...'
+
+echo
+echo '=== KAFKA RETAINED OFFSETS ==='
+sudo docker exec "$KAFKA_CONTAINER" \
+  /opt/kafka/bin/kafka-get-offsets.sh \
+  --bootstrap-server "$KAFKA_BOOTSTRAP" \
+  --topic "$EFRIS_TOPIC" \
+  --time earliest
+
+sudo docker exec "$KAFKA_CONTAINER" \
+  /opt/kafka/bin/kafka-get-offsets.sh \
+  --bootstrap-server "$KAFKA_BOOTSTRAP" \
+  --topic "$EFRIS_TOPIC" \
+  --time latest
+
+echo
+echo '=== EXISTING CONSUMER GROUP CHECK ==='
+if sudo docker exec "$KAFKA_CONTAINER" \
+  /opt/kafka/bin/kafka-consumer-groups.sh \
+  --bootstrap-server "$KAFKA_BOOTSTRAP" \
+  --describe \
+  --group "$EFRIS_GROUP"; then
+  echo
+  echo "Consumer group $EFRIS_GROUP already exists. Do not attach the consumer until its offsets are reviewed."
+  exit 2
+else
+  echo
+  echo "Consumer group $EFRIS_GROUP is not present yet, as expected for first start."
+  echo 'Proceed with scripts/start_efris_esb_consumer.sh; no ClickHouse restart is needed.'
 fi
-
-echo 'Installing topic-scoped initial-offset configuration for EAI_Efris...'
-sudo docker cp "$CONFIG_FILE" "$CLICKHOUSE_CONTAINER:$TARGET_FILE"
-
-echo 'Restarting ClickHouse so the Kafka consumer configuration is loaded...'
-sudo docker restart "$CLICKHOUSE_CONTAINER" >/dev/null
-
-echo 'Waiting for ClickHouse...'
-for _ in $(seq 1 60); do
-  if sudo docker exec "$CLICKHOUSE_CONTAINER" sh -lc \
-    'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --query "SELECT 1"' \
-    >/dev/null 2>&1; then
-    echo 'ClickHouse is ready.'
-    exit 0
-  fi
-  sleep 2
-done
-
-echo 'ClickHouse did not become ready within 120 seconds.' >&2
-exit 1
