@@ -15,6 +15,11 @@ class Settings:
     clickhouse_database: str = os.getenv("CLICKHOUSE_DATABASE", "analytics")
     clickhouse_user: str = os.getenv("CLICKHOUSE_USER", "default")
     clickhouse_password: Optional[str] = os.getenv("CLICKHOUSE_PASSWORD")
+    debezium_url: str = os.getenv("DEBEZIUM_URL", "http://localhost:8083")
+    debezium_flat_connector: str = os.getenv("DEBEZIUM_FLAT_CONNECTOR", "oracle-cdc-flat")
+    kafka_bootstrap: str = os.getenv("KAFKA_BOOTSTRAP", "localhost:9092")
+    simulator_runtime_dir: str = os.getenv("SIMULATOR_RUNTIME_DIR", "runtime/simulator")
+    simulator_stale_seconds: int = int(os.getenv("SIMULATOR_STALE_SECONDS", "10"))
 
 
 def get_settings() -> Settings:

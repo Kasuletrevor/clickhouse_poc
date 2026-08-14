@@ -1,0 +1,22 @@
+[
+  {"station_id":"SIM01","station_name":"Kampala Central","region":"CENTRAL","district":"Kampala"},
+  {"station_id":"SIM02","station_name":"Nakawa","region":"CENTRAL","district":"Kampala"},
+  {"station_id":"SIM03","station_name":"Rubaga","region":"CENTRAL","district":"Kampala"},
+  {"station_id":"SIM04","station_name":"Wakiso","region":"CENTRAL","district":"Wakiso"},
+  {"station_id":"SIM05","station_name":"Entebbe","region":"CENTRAL","district":"Wakiso"},
+  {"station_id":"SIM06","station_name":"Mukono","region":"CENTRAL","district":"Mukono"},
+  {"station_id":"SIM07","station_name":"Jinja","region":"EASTERN","district":"Jinja"},
+  {"station_id":"SIM08","station_name":"Mbale","region":"EASTERN","district":"Mbale"},
+  {"station_id":"SIM09","station_name":"Tororo","region":"EASTERN","district":"Tororo"},
+  {"station_id":"SIM10","station_name":"Busia","region":"EASTERN","district":"Busia"},
+  {"station_id":"SIM11","station_name":"Mbarara","region":"WESTERN","district":"Mbarara"},
+  {"station_id":"SIM12","station_name":"Masaka","region":"CENTRAL","district":"Masaka"},
+  {"station_id":"SIM13","station_name":"Fort Portal","region":"WESTERN","district":"Kabarole"},
+  {"station_id":"SIM14","station_name":"Hoima","region":"WESTERN","district":"Hoima"},
+  {"station_id":"SIM15","station_name":"Kabale","region":"WESTERN","district":"Kabale"},
+  {"station_id":"SIM16","station_name":"Gulu","region":"NORTHERN","district":"Gulu"},
+  {"station_id":"SIM17","station_name":"Lira","region":"NORTHERN","district":"Lira"},
+  {"station_id":"SIM18","station_name":"Arua","region":"NORTHERN","district":"Arua"},
+  {"station_id":"SIM19","station_name":"Soroti","region":"EASTERN","district":"Soroti"},
+  {"station_id":"SIM20","station_name":"Moroto","region":"NORTHERN","district":"Moroto"}
+]
