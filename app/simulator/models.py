@@ -7,7 +7,7 @@ from string import ascii_uppercase, digits
 
 ACTIVE_STATUSES = {"starting", "running", "paused", "draining"}
 SOURCE_ACTIVE_STATUSES = {"starting", "running", "paused"}
-FINAL_STATUSES = {"completed", "failed", "stale"}
+FINAL_STATUSES = {"completed", "cdc_gap", "failed", "stale"}
 VALID_STATUSES = ACTIVE_STATUSES | FINAL_STATUSES
 VALID_COMMANDS = {"run", "pause", "stop"}
 
@@ -56,12 +56,18 @@ class RunRecord:
     last_heartbeat: str | None = None
     source_rate_samples: list[dict] = field(default_factory=list)
     error: str | None = None
+    gap_events: int = 0
+    gap_oracle_committed: int | None = None
+    gap_clickhouse_received: int | None = None
+    gap_reason: str | None = None
 
     def __post_init__(self):
         if self.status not in VALID_STATUSES:
             raise ValueError(f"Invalid simulator status: {self.status}")
         if self.command not in VALID_COMMANDS:
             raise ValueError(f"Invalid simulator command: {self.command}")
+        if self.gap_events < 0:
+            raise ValueError("gap_events cannot be negative")
 
     def to_dict(self) -> dict:
         return asdict(self)
