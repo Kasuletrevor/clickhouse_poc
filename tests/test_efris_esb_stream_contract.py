@@ -5,6 +5,7 @@ SCHEMA = ROOT / "clickhouse/sql/efris_esb/001_schema.sql"
 START = ROOT / "clickhouse/sql/efris_esb/002_start_consumer.sql"
 KAFKA = ROOT / "scripts/configure_efris_esb_topic.sh"
 VERIFY = ROOT / "scripts/verify_efris_esb_stream.sh"
+BOOTSTRAP = ROOT / "scripts/bootstrap_efris_esb_consumer.sh"
 
 
 def test_clickhouse_schema_contract():
@@ -44,6 +45,15 @@ def test_start_consumer_preserves_kafka_lineage():
     assert "_partition" in sql
     assert "_offset" in sql
     assert "_timestamp_ms" in sql
+
+
+def test_bootstrap_does_not_mutate_server_config_or_restart_clickhouse():
+    script = BOOTSTRAP.read_text()
+    assert "docker restart" not in script
+    assert "docker cp" not in script
+    assert "/etc/clickhouse-server/config.d" not in script
+    assert "kafka-consumer-groups.sh" in script
+    assert "clickhouse-efris-esb-poc-v1" in script
 
 
 def test_kafka_policy_is_topic_scoped_and_seven_days():
