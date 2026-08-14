@@ -65,7 +65,7 @@ The design must work with the topic's current partition count. ClickHouse consum
 
 ## Raw Table
 
-`raw_efris_esb` stores the message exactly once and keeps it for seven days.
+`raw_efris_esb` stores each consumed Kafka record as received and keeps it for seven days.
 
 Required fields:
 
@@ -78,11 +78,13 @@ Required fields:
 
 The raw table is the short replay/investigation buffer inside ClickHouse. The analytical table must not duplicate the encrypted `data.content`.
 
+Kafka/ClickHouse ingestion is treated as at-least-once for failure recovery. `(kafka_topic, kafka_partition, kafka_offset)` is therefore retained as the physical event identity so replay duplicates can be detected and, where necessary, deduplicated in analytical queries or table design.
+
 ## Analytical Event Grain
 
 One row in `efris_event` represents one EFRIS API response observed at the ESB.
 
-Primary event identity is `globalInfo.dataExchangeId` when present. Kafka `(topic, partition, offset)` remains the physical ingestion identity and traceability fallback.
+Primary business event identity is `globalInfo.dataExchangeId` when present. Kafka `(topic, partition, offset)` remains the physical ingestion identity and traceability fallback.
 
 Keep only the fields that answer who, what interface, when, and what happened:
 
@@ -193,7 +195,7 @@ The implementation is successful when:
 
 1. A new ClickHouse consumer reads the earliest retained `EAI_Efris` offsets rather than starting only at new traffic.
 2. It catches up to the current Kafka end offsets and then continues live.
-3. Raw row count and parsed row count reconcile for valid parseable messages, with any rejected/malformed messages explicitly accounted for.
+3. Raw and parsed records reconcile for valid parseable messages, with any malformed records and any replay duplicates explicitly accounted for.
 4. Known success events produce `is_success = 1` for `returnCode = '00'`.
 5. Failure events with empty content still parse correctly.
 6. Success events with encrypted content store content presence/size/encryption metadata but do not duplicate encrypted content into `efris_event`.
