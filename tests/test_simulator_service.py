@@ -50,6 +50,39 @@ def test_draining_becomes_completed_when_counts_match(tmp_path):
     assert payload["active"]["status"] == "completed"
 
 
+def test_stalled_draining_shortfall_can_be_closed_as_cdc_gap(tmp_path):
+    store = RunStore(tmp_path)
+    store.create_run(
+        RunRecord(
+            "EFR-GAP",
+            "S260813LF",
+            "draining",
+            "stop",
+            14,
+            300,
+            4200,
+            0.12,
+            1,
+            generated=4200,
+            active_elapsed_seconds=300,
+            last_heartbeat="2026-08-13T11:38:43+00:00",
+        )
+    )
+
+    class GapRepo(Repo):
+        def oracle_run_summary(self, prefix):
+            return {"oracle_committed": 4200, "affected_invoices": 0, "taxpayers": 0, "devices": 0, "error_codes": 0}
+
+        def clickhouse_run_summary(self, prefix):
+            row = super().clickhouse_run_summary(prefix)
+            row["clickhouse_received"] = 3964
+            return row
+
+    view = SimulatorService(store, Manager(), GapRepo()).status()["active"]
+    assert view["can_close_cdc_gap"] is True
+    assert view["draining_for_seconds"] >= 30
+
+
 def test_close_cdc_gap_records_exact_shortfall_and_releases_active_run(tmp_path):
     store = RunStore(tmp_path)
     store.create_run(
@@ -88,6 +121,11 @@ def test_close_cdc_gap_records_exact_shortfall_and_releases_active_run(tmp_path)
     assert closed["gap_reason"] == "cdc_continuity_lost"
     assert closed["finished_at"] is not None
     assert store.get_active_run() is None
+
+    view = service.status()["active"]
+    assert view["status"] == "cdc_gap"
+    assert view["in_flight"] == 0
+    assert view["gap_events"] == 236
 
 
 def test_close_cdc_gap_rejects_a_run_that_is_not_draining(tmp_path):
