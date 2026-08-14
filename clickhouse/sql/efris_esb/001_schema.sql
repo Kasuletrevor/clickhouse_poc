@@ -177,8 +177,8 @@ SELECT
     e.kafka_offset,
     e.kafka_timestamp,
     e.ingested_at
-FROM analytics.efris_event FINAL AS e
-LEFT JOIN analytics.dim_efris_interface FINAL AS d
+FROM analytics.efris_event AS e FINAL
+LEFT JOIN analytics.dim_efris_interface AS d FINAL
     ON e.interface_code = d.interface_code;
 
 CREATE VIEW IF NOT EXISTS analytics.v_efris_success_transactions AS
