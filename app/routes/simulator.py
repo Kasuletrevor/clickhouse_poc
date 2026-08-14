@@ -42,3 +42,8 @@ def resume_run(run_id: str, request: Request):
 @router.post("/runs/{run_id}/stop")
 def stop_run(run_id: str, request: Request):
     return service(request).stop(run_id)
+
+
+@router.post("/runs/{run_id}/close-gap")
+def close_cdc_gap(run_id: str, request: Request):
+    return service(request).close_gap(run_id)
