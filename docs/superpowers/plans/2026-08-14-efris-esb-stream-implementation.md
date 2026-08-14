@@ -1,68 +1,71 @@
 # EFRIS ESB Streaming Ingestion Implementation Plan
 
-> **For implementation:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-## Goal
+**Goal:** Consume every message currently retained in Kafka topic `EAI_Efris`, then continue live ingestion into ClickHouse, keeping the exact JSON for seven days and a lean long-term analytical event without decrypting `data.content`.
 
-Ingest every currently retained message in Kafka topic `EAI_Efris` and then continue consuming live ESB traffic into ClickHouse, preserving the original JSON for seven days and a narrow long-term analytical event record without decrypting `data.content`.
+**Architecture:** A ClickHouse `Kafka` engine table reads each Kafka message as one opaque `RawBLOB` string. One materialized view writes the exact payload plus Kafka lineage into `analytics.raw_efris_esb`; a second materialized view parses only valid JSON from raw into `analytics.efris_event`. Kafka physical identity `(topic, partition, offset)` is retained throughout. The Kafka-to-raw view is created only after the dedicated consumer group is proven to start at the earliest retained offsets.
 
-## Architecture
+**Tech Stack:** Apache Kafka 4.3.x, ClickHouse 26.7.x, ClickHouse Kafka engine/materialized views, Bash, Pytest, Docker Compose.
 
-Use one ClickHouse `Kafka` engine table as the consumer for `EAI_Efris`. The Kafka table reads each Kafka value as one opaque string (`RawBLOB`) so new JSON fields and malformed JSON cannot break Kafka deserialization. A single materialized view writes the exact payload plus Kafka lineage into `analytics.raw_efris_esb`. A second materialized view parses only valid JSON from the raw table into `analytics.efris_event`; invalid JSON remains visible through a view over the seven-day raw table. `efris_event` is eventually deduplicated by Kafka physical identity with `ReplacingMergeTree`, while the raw table preserves every ClickHouse delivery for forensic accounting. Kafka and raw ClickHouse retention are seven days; parsed events are retained long-term for the POC.
+## Global Constraints
 
-The initial ClickHouse consumer group is `clickhouse-efris-esb-poc-v1`. It must be positioned at the earliest retained offsets before the Kafka-to-raw materialized view is attached. This is deliberately separated from schema creation so no live consumer starts before the bootstrap offset is verified.
-
-## Tech Stack
-
-- Apache Kafka 4.3.x, topic `EAI_Efris`
-- ClickHouse 26.7.x, database `analytics`
-- ClickHouse Kafka table engine and materialized views
-- Bash for idempotent Kafka policy and verification helpers
-- Pytest contract tests for checked-in SQL/shell behavior
-- Docker Compose runtime already used by the POC
-
-## Delivery Boundary
-
-This implementation delivers the **real ESB → Kafka → ClickHouse data plane and analytical foundation**. It does not redesign the existing web UI in the same change. Once this pipeline is verified against live EFRIS traffic, a separate UI task can switch/add dashboard pages backed by `analytics.efris_event`.
+- Kafka topic: `EAI_Efris`.
+- ClickHouse database: `analytics`.
+- Consume **all currently retained messages plus live traffic**.
+- Kafka `EAI_Efris` retention: 7 days after initial backlog catch-up is proven.
+- ClickHouse `raw_efris_esb` TTL: 7 days.
+- `efris_event`: long-term POC analytical history; no short TTL in this change.
+- Success rule: `returnCode = '00'` only.
+- Never decrypt, decode into business content, or duplicate encrypted `data.content` into `efris_event`.
+- Preserve Kafka topic/partition/offset/timestamp lineage.
+- Treat Kafka→ClickHouse as at-least-once; never claim exactly-once delivery.
+- Do not change Kafka partition count or replication factor in this change.
+- Do not apply EFRIS retention settings globally or to Kafka internal/Connect/Debezium topics.
+- Do not edit `compose.yaml` unless runtime testing proves unavoidable; the RHEL working tree may contain a deliberate local advertised-listener change.
+- No credentials or key material in source, SQL, tests, docs, or logs.
+- UI/dashboard redesign is a separate bounded feature after the live data plane is verified.
 
 ---
 
-## Task 1: Add failing contract tests for the approved stream contract
+### Task 1: Contract tests for the stream boundary
 
 **Files:**
 - Create: `tests/test_efris_esb_stream_contract.py`
-- Reference: `docs/superpowers/specs/2026-08-14-efris-esb-stream-design.md`
 
-- [ ] **Step 1: Write tests before implementation files exist**
+**Interfaces:**
+- Consumes: approved design at `docs/superpowers/specs/2026-08-14-efris-esb-stream-design.md`.
+- Produces: executable repository contract for the SQL and shell files created in Tasks 2–4.
 
-Create tests that expect the future implementation to provide all of the following:
+- [ ] **Step 1: Write the failing contract test**
 
 ```python
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SQL_SCHEMA = ROOT / "clickhouse/sql/efris_esb/001_schema.sql"
-SQL_START = ROOT / "clickhouse/sql/efris_esb/002_start_consumer.sql"
-KAFKA_SCRIPT = ROOT / "scripts/configure_efris_esb_topic.sh"
-VERIFY_SCRIPT = ROOT / "scripts/verify_efris_esb_stream.sh"
+SCHEMA = ROOT / "clickhouse/sql/efris_esb/001_schema.sql"
+START = ROOT / "clickhouse/sql/efris_esb/002_start_consumer.sql"
+KAFKA = ROOT / "scripts/configure_efris_esb_topic.sh"
+VERIFY = ROOT / "scripts/verify_efris_esb_stream.sh"
 
 
-def test_schema_contract():
-    sql = SQL_SCHEMA.read_text()
+def test_clickhouse_schema_contract():
+    sql = SCHEMA.read_text()
     assert "analytics.raw_efris_esb" in sql
     assert "analytics.efris_event" in sql
+    assert "analytics.efris_esb_kafka_queue" in sql
     assert "EAI_Efris" in sql
     assert "clickhouse-efris-esb-poc-v1" in sql
     assert "kafka_format = 'RawBLOB'" in sql
     assert "INTERVAL 7 DAY" in sql
-    assert "return_code = '00'" in sql
     assert "isValidJSON" in sql
     assert "dataExchangeId" in sql
-    assert "_partition" not in sql  # physical Kafka virtuals belong in start-consumer MV
+    assert "returnCode" in sql
+    assert "= '00'" in sql
 
 
-def test_consumer_start_contract():
-    sql = SQL_START.read_text()
+def test_start_consumer_preserves_kafka_lineage():
+    sql = START.read_text()
     assert "efris_esb_kafka_to_raw_mv" in sql
     assert "_topic" in sql
     assert "_partition" in sql
@@ -70,35 +73,32 @@ def test_consumer_start_contract():
     assert "_timestamp_ms" in sql
 
 
-def test_kafka_retention_is_topic_scoped():
-    script = KAFKA_SCRIPT.read_text()
+def test_kafka_policy_is_topic_scoped_and_seven_days():
+    script = KAFKA.read_text()
     assert "EAI_Efris" in script
+    assert "--entity-type topics" in script
     assert "retention.ms=604800000" in script
     assert "retention.bytes=-1" in script
     assert "cleanup.policy=delete" in script
     assert "segment.ms=3600000" in script
-    assert "--entity-type topics" in script
+    assert "--partitions" not in script
 
 
-def test_verification_checks_offsets_and_live_ingestion():
-    script = VERIFY_SCRIPT.read_text()
+def test_verifier_checks_offsets_and_tables():
+    script = VERIFY.read_text()
     assert "kafka-get-offsets" in script
     assert "kafka-consumer-groups" in script
     assert "raw_efris_esb" in script
     assert "efris_event" in script
 ```
 
-Do not make the test depend on secrets, live Kafka, or a running ClickHouse container. Runtime verification comes later.
-
-- [ ] **Step 2: Run the focused test and verify it fails for missing implementation files**
-
-Run:
+- [ ] **Step 2: Run the focused test and confirm RED**
 
 ```bash
 python -m pytest -q tests/test_efris_esb_stream_contract.py
 ```
 
-Expected: FAIL because the new SQL/scripts do not exist yet.
+Expected: FAIL because the implementation files do not exist.
 
 - [ ] **Step 3: Commit the red test**
 
@@ -109,65 +109,33 @@ git commit -m "test: define EFRIS ESB stream contract"
 
 ---
 
-## Task 2: Add the topic-scoped seven-day Kafka policy
+### Task 2: Kafka policy helper and ClickHouse schema
 
 **Files:**
 - Create: `scripts/configure_efris_esb_topic.sh`
+- Create: `clickhouse/sql/efris_esb/001_schema.sql`
 - Test: `tests/test_efris_esb_stream_contract.py`
 
-- [ ] **Step 1: Implement an idempotent topic configuration script**
+**Interfaces:**
+- Consumes: Kafka broker `kafka:19092`, topic `EAI_Efris`.
+- Produces: an idempotent topic-retention helper and all ClickHouse objects except the Kafka→raw consumer-start MV.
 
-The script must configure **only** `EAI_Efris` by default and must not alter partitions or replication factor.
+- [ ] **Step 1: Implement the topic-scoped retention helper**
 
-Core command:
+Use environment-overridable defaults (`KAFKA_CONTAINER=poc-kafka`, `KAFKA_BOOTSTRAP=kafka:19092`, `EFRIS_TOPIC=EAI_Efris`) and run only:
 
 ```bash
 /opt/kafka/bin/kafka-configs.sh \
-  --bootstrap-server kafka:19092 \
+  --bootstrap-server "$KAFKA_BOOTSTRAP" \
   --entity-type topics \
-  --entity-name EAI_Efris \
+  --entity-name "$EFRIS_TOPIC" \
   --alter \
   --add-config 'cleanup.policy=delete,retention.ms=604800000,retention.bytes=-1,segment.ms=3600000'
 ```
 
-Use environment-overridable shell variables for container name, bootstrap server, and topic, with safe defaults matching the POC. Execute through `sudo docker exec poc-kafka ...`. End by describing the topic configuration so the operator sees the applied values.
+Then describe the topic. Do not alter partitions, replication, or broker defaults.
 
-Do **not** add any global broker retention setting and do **not** touch `__consumer_offsets`, Kafka Connect state topics, or Debezium schema-history topics.
-
-- [ ] **Step 2: Run the focused contract test**
-
-```bash
-python -m pytest -q tests/test_efris_esb_stream_contract.py
-```
-
-Expected: the Kafka-policy assertions pass; SQL/start/verification assertions remain red until later tasks.
-
-- [ ] **Step 3: Shell syntax check**
-
-```bash
-bash -n scripts/configure_efris_esb_topic.sh
-```
-
-Expected: exit 0.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add scripts/configure_efris_esb_topic.sh tests/test_efris_esb_stream_contract.py
-git commit -m "feat: configure EFRIS Kafka retention"
-```
-
----
-
-## Task 3: Create the ClickHouse raw and parsed schema without starting Kafka consumption
-
-**Files:**
-- Create: `clickhouse/sql/efris_esb/001_schema.sql`
-- Test: `tests/test_efris_esb_stream_contract.py`
-
-- [ ] **Step 1: Define the seven-day raw table**
-
-Use a persistent raw table similar to:
+- [ ] **Step 2: Define `analytics.raw_efris_esb`**
 
 ```sql
 CREATE TABLE IF NOT EXISTS analytics.raw_efris_esb
@@ -185,13 +153,11 @@ ORDER BY (kafka_topic, kafka_partition, kafka_offset, ingested_at)
 TTL ingested_at + INTERVAL 7 DAY DELETE;
 ```
 
-The raw table intentionally preserves every delivery rather than pretending the Kafka→ClickHouse path is exactly once.
+Raw intentionally preserves every consumed delivery for forensic/reconciliation purposes.
 
-- [ ] **Step 2: Define the narrow analytical event table**
+- [ ] **Step 3: Define `analytics.efris_event`**
 
-Use `ReplacingMergeTree(ingested_at)` keyed by physical Kafka identity so duplicate deliveries converge during merges while remaining explicitly at-least-once at ingestion time.
-
-Required columns:
+Use these columns exactly:
 
 ```sql
 event_id Nullable(String),
@@ -223,14 +189,12 @@ Use:
 ```sql
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(ingested_at)
-ORDER BY (kafka_topic, kafka_partition, kafka_offset)
+ORDER BY (kafka_topic, kafka_partition, kafka_offset);
 ```
 
-Do not add the encrypted `data.content` or `signature` to this table.
+This provides eventual analytical deduplication by Kafka identity without pretending ingestion itself is exactly once.
 
-- [ ] **Step 3: Define the Kafka engine table but do not attach its materialized view yet**
-
-Create one-column queue table:
+- [ ] **Step 4: Define the Kafka queue without starting consumption**
 
 ```sql
 CREATE TABLE IF NOT EXISTS analytics.efris_esb_kafka_queue
@@ -249,31 +213,30 @@ SETTINGS
     kafka_poll_max_batch_size = 10000;
 ```
 
-Keep `kafka_num_consumers = 1` while the topic has one partition. Increasing partitions later is a separate operational change; consumer count can then be increased to match useful parallelism.
+Do not create `analytics.efris_esb_kafka_to_raw_mv` in `001_schema.sql`. The consumer-start view belongs in Task 3 after earliest offsets are established.
 
-Do not create `analytics.efris_esb_kafka_to_raw_mv` in this file. That separation is what lets us establish/verify the earliest consumer-group position before live consumption begins.
+- [ ] **Step 5: Define raw→parsed materialization**
 
-- [ ] **Step 4: Create the raw→parsed materialized view with tolerant extraction**
-
-The materialized view must read from `analytics.raw_efris_esb`, not directly from Kafka, and must include:
+Create `analytics.efris_esb_raw_to_event_mv TO analytics.efris_event` and parse only:
 
 ```sql
 WHERE isValidJSON(payload)
 ```
 
-Use `JSONExtractString` only for the agreed narrow fields. Convert empty optional strings using `nullIf(..., '')`. Parse `globalInfo.requestTime` as Africa/Kampala time with a best-effort `OrNull` parser. Derive:
+Use `JSONExtractString(payload, 'globalInfo', ...)`, `JSONExtractString(payload, 'returnStateInfo', ...)`, and `JSONExtractString(payload, 'data', 'dataDescription', ...)` for the approved narrow fields. Convert empty optional strings with `nullIf(..., '')`. Parse `globalInfo.requestTime` with a best-effort `OrNull` DateTime64 parser in `Africa/Kampala`.
+
+Derivations:
 
 ```sql
-return_code = JSONExtractString(payload, 'returnStateInfo', 'returnCode')
-is_success = return_code = '00'
+is_success = (return_code = '00')
 content_present = notEmpty(JSONExtractString(payload, 'data', 'content'))
 content_bytes = length(JSONExtractString(payload, 'data', 'content'))
-content_encrypted = JSONExtractString(payload, 'data', 'dataDescription', 'encryptCode') = '1'
+content_encrypted = (JSONExtractString(payload, 'data', 'dataDescription', 'encryptCode') = '1')
 ```
 
-Normalize the known parameterized message pattern conservatively while retaining the original message. The first implementation should strip only trailing contextual text beginning with `(TIN:` rather than attempting to infer every future EFRIS message pattern.
+For `normalized_return_message`, preserve the original `return_message` separately and initially remove only a trailing parameter block beginning with `(TIN:`. Do not invent undocumented error-code meanings.
 
-- [ ] **Step 5: Add an invalid-message view instead of duplicating raw payloads**
+- [ ] **Step 6: Define invalid-message and observed-code views**
 
 ```sql
 CREATE VIEW IF NOT EXISTS analytics.v_efris_esb_invalid_messages AS
@@ -282,60 +245,44 @@ FROM analytics.raw_efris_esb
 WHERE NOT isValidJSON(payload);
 ```
 
-This accounts for malformed JSON during the same seven-day raw window without another raw-payload copy.
+Create `analytics.v_efris_observed_return_codes` grouped by `(interface_code, return_code, normalized_return_message)` and expose `first_seen`, `last_seen`, `event_count`, `distinct_taxpayers`, `distinct_devices`, and `is_success`.
 
-- [ ] **Step 6: Add the documented interface dimension**
+- [ ] **Step 7: Define the interface dimension idempotently**
 
-Create `analytics.dim_efris_interface` and seed the documented mappings currently used by the POC, including at minimum T104, T106, T108, T109, T110, T113, T114, T115, T118, T119, T124, T125, T126, T127, T128, T129, T130, T131, T137, T138 and T139. Unknown codes must remain usable through LEFT JOINs; never reject them.
+Create `analytics.dim_efris_interface(interface_code String, interface_name String)` and seed the documented interface mappings used in the POC. Insert only codes not already present so rerunning `001_schema.sql` does not multiply rows. Include at least T104, T106, T108, T109, T110, T113, T114, T115, T118, T119, T124, T125, T126, T127, T128, T129, T130, T131, T137, T138 and T139. Unknown codes must remain analyzable through LEFT JOINs.
 
-- [ ] **Step 7: Add the observed return-code view**
-
-Create a view grouped by:
-
-```text
-(interface_code, return_code, normalized_return_message)
-```
-
-Expose:
-
-```text
-first_seen
-last_seen
-event_count
-distinct_taxpayers
-distinct_devices
-is_success
-```
-
-The view must learn from the stream; do not hard-code undocumented return-code meanings. `00` is the only initial success rule.
-
-- [ ] **Step 8: Re-run contract tests**
+- [ ] **Step 8: Run focused tests and syntax checks**
 
 ```bash
 python -m pytest -q tests/test_efris_esb_stream_contract.py
+bash -n scripts/configure_efris_esb_topic.sh
 ```
 
-Expected: schema-related assertions pass; start-consumer and verification assertions still fail until their files exist.
+Expected: Kafka/schema assertions pass; consumer-start/verifier assertions remain red.
 
 - [ ] **Step 9: Commit**
 
 ```bash
-git add clickhouse/sql/efris_esb/001_schema.sql tests/test_efris_esb_stream_contract.py
-git commit -m "feat: add EFRIS ESB ClickHouse schema"
+git add scripts/configure_efris_esb_topic.sh clickhouse/sql/efris_esb/001_schema.sql tests/test_efris_esb_stream_contract.py
+git commit -m "feat: add EFRIS ESB stream schema"
 ```
 
 ---
 
-## Task 4: Add the controlled consumer-start SQL and verification helper
+### Task 3: Controlled consumer start and runtime verifier
 
 **Files:**
 - Create: `clickhouse/sql/efris_esb/002_start_consumer.sql`
 - Create: `scripts/verify_efris_esb_stream.sh`
 - Test: `tests/test_efris_esb_stream_contract.py`
 
-- [ ] **Step 1: Create the Kafka→raw materialized view in a separate file**
+**Interfaces:**
+- Consumes: `analytics.efris_esb_kafka_queue`, `analytics.raw_efris_esb`, consumer group `clickhouse-efris-esb-poc-v1`.
+- Produces: background Kafka→raw ingestion and a read-only health/reconciliation report.
 
-The complete consumer-start file should create only the bridge from the already-defined Kafka queue to the raw table:
+- [ ] **Step 1: Create the consumer-start MV**
+
+`002_start_consumer.sql` must contain:
 
 ```sql
 CREATE MATERIALIZED VIEW IF NOT EXISTS analytics.efris_esb_kafka_to_raw_mv
@@ -351,27 +298,27 @@ SELECT
 FROM analytics.efris_esb_kafka_queue;
 ```
 
-Using `_topic`, `_partition`, `_offset`, and `_timestamp_ms` preserves Kafka lineage in every raw row.
+- [ ] **Step 2: Implement the read-only verifier**
 
-- [ ] **Step 2: Add a verification script that does not mutate data**
+`scripts/verify_efris_esb_stream.sh` must report:
 
-The script must report, not hide:
+```text
+Kafka partition/end offsets
+consumer-group current offset and lag
+raw count and unique (topic,partition,offset)
+valid/invalid JSON counts
+parsed count and unique Kafka identities
+raw duplicate-delivery count
+success/failure counts and rate
+distinct interfaces/taxpayers/devices
+newest event/Kafka/ingestion timestamps
+observed return-code sample
+raw table TTL definition
+```
 
-- Kafka topic partition count and end offsets
-- ClickHouse consumer-group current offset and lag
-- raw total rows and unique `(topic, partition, offset)` count
-- valid versus invalid JSON raw rows
-- parsed event total/physical-identity count
-- `returnCode='00'` success count/rate
-- distinct interfaces, taxpayers and devices
-- newest Kafka timestamp / event time / ClickHouse ingestion time
-- duplicate-delivery count (`raw count - unique physical identities`)
-- observed return-code samples
-- raw TTL definition
+Use `kafka-get-offsets.sh`, `kafka-consumer-groups.sh`, and `clickhouse-client`. Accept ClickHouse authentication only from environment variables; never embed or echo credentials.
 
-Use `kafka-get-offsets.sh` and `kafka-consumer-groups.sh` for Kafka. Use `clickhouse-client` for ClickHouse. Accept the ClickHouse password only through an environment variable if authentication requires it; never embed a password in the repository or print it.
-
-- [ ] **Step 3: Finish the contract tests**
+- [ ] **Step 3: Run the focused tests and shell syntax checks**
 
 ```bash
 python -m pytest -q tests/test_efris_esb_stream_contract.py
@@ -379,43 +326,39 @@ bash -n scripts/configure_efris_esb_topic.sh
 bash -n scripts/verify_efris_esb_stream.sh
 ```
 
-Expected: all focused tests/syntax checks pass.
+Expected: PASS.
 
 - [ ] **Step 4: Commit**
 
 ```bash
 git add clickhouse/sql/efris_esb/002_start_consumer.sql scripts/verify_efris_esb_stream.sh tests/test_efris_esb_stream_contract.py
-git commit -m "feat: add EFRIS stream consumer bootstrap"
+git commit -m "feat: add EFRIS Kafka consumer bootstrap"
 ```
 
 ---
 
-## Task 5: Deploy on `datalake-test02` from the earliest retained Kafka offsets
+### Task 4: Deploy from earliest retained offsets and prove catch-up/live continuity
 
-**Files used:**
-- `scripts/configure_efris_esb_topic.sh`
-- `clickhouse/sql/efris_esb/001_schema.sql`
-- `clickhouse/sql/efris_esb/002_start_consumer.sql`
-- `scripts/verify_efris_esb_stream.sh`
+**Files:**
+- Use: `clickhouse/sql/efris_esb/001_schema.sql`
+- Use: `clickhouse/sql/efris_esb/002_start_consumer.sql`
+- Use: `scripts/configure_efris_esb_topic.sh`
+- Use: `scripts/verify_efris_esb_stream.sh`
 
-This task is runtime verification; no success claim is allowed before its commands pass on the RHEL host.
+**Interfaces:**
+- Consumes: live `EAI_Efris` topic on `datalake-test02`.
+- Produces: verified `raw_efris_esb` + `efris_event` live pipeline and recorded bootstrap reconciliation evidence.
 
-- [ ] **Step 1: Pull the branch without overwriting the host's local Kafka advertised-listener edit**
-
-First inspect:
+- [ ] **Step 1: Protect the server working tree**
 
 ```bash
 git status --short
 git branch --show-current
 ```
 
-The host may still show a local modification to `compose.yaml` for the external advertised Kafka listener. Preserve it. Do not reset or overwrite it as part of this feature.
+Preserve any local `compose.yaml` advertised-listener modification. Do not reset it.
 
-Then update the feature branch using the safest path compatible with that local modification.
-
-- [ ] **Step 2: Capture the Kafka retained range before starting ClickHouse**
-
-Run both earliest and latest offsets and save/display them for reconciliation:
+- [ ] **Step 2: Capture the current retained Kafka range before changing retention**
 
 ```bash
 sudo docker exec poc-kafka /opt/kafka/bin/kafka-get-offsets.sh \
@@ -425,28 +368,9 @@ sudo docker exec poc-kafka /opt/kafka/bin/kafka-get-offsets.sh \
   --bootstrap-server kafka:19092 --topic EAI_Efris --time -1
 ```
 
-For each partition, `latest - earliest` is the retained backlog existing at bootstrap time.
+Record earliest and end offset per partition. **Do not shorten Kafka retention yet**; the requirement is to ingest every message that is currently retained.
 
-- [ ] **Step 3: Apply the seven-day Kafka topic policy**
-
-```bash
-bash scripts/configure_efris_esb_topic.sh
-```
-
-Verify the describe output shows:
-
-```text
-cleanup.policy=delete
-retention.ms=604800000
-retention.bytes=-1
-segment.ms=3600000
-```
-
-Do not change the partition count in this task.
-
-- [ ] **Step 4: Create the ClickHouse schema while the Kafka-to-raw MV is still absent**
-
-Run the schema SQL through the existing ClickHouse container/client using credentials supplied from the environment, never from checked-in files:
+- [ ] **Step 3: Apply the ClickHouse schema only**
 
 ```bash
 sudo docker exec -i poc-clickhouse clickhouse-client \
@@ -454,21 +378,11 @@ sudo docker exec -i poc-clickhouse clickhouse-client \
   < clickhouse/sql/efris_esb/001_schema.sql
 ```
 
-Then confirm the queue exists but the start MV does not:
+Verify `efris_esb_kafka_queue`, `raw_efris_esb`, and `efris_event` exist and `efris_esb_kafka_to_raw_mv` does not.
 
-```sql
-SELECT name, engine
-FROM system.tables
-WHERE database = 'analytics'
-  AND name IN ('efris_esb_kafka_queue', 'raw_efris_esb', 'efris_event', 'efris_esb_kafka_to_raw_mv')
-ORDER BY name;
-```
+- [ ] **Step 4: Position the dedicated inactive group at earliest**
 
-Expected: the three tables exist; `efris_esb_kafka_to_raw_mv` is absent.
-
-- [ ] **Step 5: Position the dedicated consumer group at the earliest retained offsets**
-
-While no ClickHouse Kafka-to-raw MV is attached, execute a dry run first:
+Dry run:
 
 ```bash
 sudo docker exec poc-kafka /opt/kafka/bin/kafka-consumer-groups.sh \
@@ -478,7 +392,7 @@ sudo docker exec poc-kafka /opt/kafka/bin/kafka-consumer-groups.sh \
   --reset-offsets --to-earliest
 ```
 
-Then execute:
+Execute:
 
 ```bash
 sudo docker exec poc-kafka /opt/kafka/bin/kafka-consumer-groups.sh \
@@ -488,13 +402,11 @@ sudo docker exec poc-kafka /opt/kafka/bin/kafka-consumer-groups.sh \
   --reset-offsets --to-earliest --execute
 ```
 
-Immediately describe the group and verify each partition's current offset equals the captured earliest retained offset.
+Describe the group and prove its current offset equals the captured earliest offset for each partition.
 
-**Hard gate:** if the broker/CLI refuses to initialize/reset this new inactive group, do **not** attach the materialized view and do not allow the consumer to default to latest. Stop here and implement a tested ClickHouse/librdkafka `auto.offset.reset=smallest` configuration scoped to this stream before proceeding. The requirement is all retained + live, not live-only.
+**Hard gate:** if Kafka refuses to initialize/reset the new inactive group, do not create the consumer MV and do not accept a default-to-latest start. Stop and add a tested ClickHouse/librdkafka `auto.offset.reset=smallest` configuration scoped to this stream before continuing.
 
-- [ ] **Step 6: Attach the Kafka→raw materialized view**
-
-Only after earliest offsets are proven:
+- [ ] **Step 5: Start background consumption**
 
 ```bash
 sudo docker exec -i poc-clickhouse clickhouse-client \
@@ -502,30 +414,28 @@ sudo docker exec -i poc-clickhouse clickhouse-client \
   < clickhouse/sql/efris_esb/002_start_consumer.sql
 ```
 
-This is the moment live/background consumption begins.
-
-- [ ] **Step 7: Watch the consumer catch up**
-
-Run repeatedly:
+- [ ] **Step 6: Watch the backlog catch up**
 
 ```bash
 sudo docker exec poc-kafka /opt/kafka/bin/kafka-consumer-groups.sh \
   --bootstrap-server kafka:19092 \
-  --group clickhouse-efris-esb-poc-v1 \
-  --describe
+  --group clickhouse-efris-esb-poc-v1 --describe
 ```
 
-Expected: lag decreases toward zero while the topic continues receiving live ESB traffic.
+Repeat until lag reaches zero or stays near zero only because new ESB events are still arriving.
 
-- [ ] **Step 8: Prove the bootstrap backlog was not skipped**
+- [ ] **Step 7: Prove no bootstrap history was skipped**
 
-Using the retained earliest/end offsets captured before Step 6, query ClickHouse per partition and confirm the raw table contains physical offsets covering that initial range. For the initial one-partition topic this means the raw minimum offset equals the captured earliest offset and the number of unique offsets below the captured initial end offset equals `initial_end - initial_earliest`.
+For each partition, verify ClickHouse contains the captured initial range. For the original one-partition topic:
 
-Use physical Kafka identities, not only `count(*)`, because at-least-once redelivery may produce duplicate raw rows.
+```text
+min(raw kafka_offset) = captured earliest
+unique raw offsets below captured initial end = initial_end - initial_earliest
+```
 
-- [ ] **Step 9: Prove parsed reconciliation**
+Use `uniqExact((kafka_topic,kafka_partition,kafka_offset))`; do not rely on raw `count(*)` because at-least-once redelivery can duplicate raw rows.
 
-Run checks equivalent to:
+- [ ] **Step 8: Prove parsed reconciliation and malformed-message accounting**
 
 ```sql
 SELECT count() AS raw_rows,
@@ -541,69 +451,75 @@ SELECT count() AS parsed_rows,
 FROM analytics.efris_event FINAL;
 ```
 
-Expected: `parsed_unique` equals the unique physical identities among valid raw JSON; invalid raw JSON is explicitly accounted rather than blocking the consumer.
+Expected: `parsed_unique` equals unique valid raw Kafka identities; invalid raw JSON is visible rather than blocking consumption.
 
-- [ ] **Step 10: Prove success and encrypted-content behavior**
+- [ ] **Step 9: Prove success/encrypted-content behavior**
 
-Verify known success events satisfy:
+Verify `return_code='00'` implies `is_success=1`. Confirm `efris_event` has only `content_present`, `content_bytes`, and `content_encrypted` for payload-content metadata and has no `content` or `signature` analytical column.
 
-```text
-return_code = '00'
-is_success = 1
+- [ ] **Step 10: Prove live continuation**
+
+Record ClickHouse's current maximum Kafka offset, wait for the next real ESB event, and show the maximum advances without any batch trigger.
+
+- [ ] **Step 11: Only after backlog proof, shorten `EAI_Efris` retention to seven days**
+
+```bash
+bash scripts/configure_efris_esb_topic.sh
 ```
 
-and that successful encrypted payloads expose only `content_present`, `content_bytes`, and `content_encrypted` in `efris_event`; there must be no analytical `content`/`signature` column.
+Verify `cleanup.policy=delete`, `retention.ms=604800000`, `retention.bytes=-1`, and `segment.ms=3600000` on `EAI_Efris`. This ordering prevents a retention-policy change from deleting older currently-retained messages before the first ClickHouse catch-up.
 
-- [ ] **Step 11: Prove live continuation**
-
-Record the latest raw Kafka offset in ClickHouse, wait for the next real ESB event, and show that the maximum offset advances without running a batch job or manually triggering ClickHouse.
-
-- [ ] **Step 12: Run the verification helper**
+- [ ] **Step 12: Run the consolidated verifier**
 
 ```bash
 bash scripts/verify_efris_esb_stream.sh
 ```
 
-Expected: healthy consumer, near-zero/zero lag depending on live arrival rate, raw/parsed reconciliation, seven-day TTL, and current event freshness.
+Expected: healthy consumer, reconciled raw/parsed physical identities, explicit invalid-message count, seven-day raw TTL, and fresh live arrivals.
 
 ---
 
-## Task 6: Document the operational runbook and run the full repository verification
+### Task 5: Runbook, full regression verification, and PR evidence
 
 **Files:**
 - Create: `docs/efris-esb-stream.md`
-- Update: `README.md` only if a short link to the new runbook fits the existing documentation structure
+- Modify: `README.md` only to add a short runbook link if it fits the existing structure.
+
+**Interfaces:**
+- Consumes: verified runtime objects from Task 4.
+- Produces: operator recovery instructions and auditable PR evidence.
 
 - [ ] **Step 1: Document the final object map**
-
-Document:
 
 ```text
 EAI_Efris
   -> analytics.efris_esb_kafka_queue
   -> analytics.efris_esb_kafka_to_raw_mv
-  -> analytics.raw_efris_esb           (7-day TTL)
+  -> analytics.raw_efris_esb             (7-day TTL)
   -> analytics.efris_esb_raw_to_event_mv
-  -> analytics.efris_event             (long-term POC)
+  -> analytics.efris_event               (long-term POC)
   -> analytics.dim_efris_interface
   -> analytics.v_efris_observed_return_codes
   -> analytics.v_efris_esb_invalid_messages
 ```
 
-Include the consumer group, seven-day Kafka policy, at-least-once semantics, Kafka physical identity, and the rule that the POC never decrypts `data.content`.
+Document consumer group `clickhouse-efris-esb-poc-v1`, seven-day Kafka policy, at-least-once semantics, physical Kafka identity, and the no-decryption rule.
 
-- [ ] **Step 2: Add recovery notes**
+- [ ] **Step 2: Document recovery**
 
-Cover:
+State explicitly:
 
-- ClickHouse restart: resume from committed consumer offsets.
-- Reprocessing inside Kafka's retained seven-day window: detach/drop the consumer MV as appropriate, reset the dedicated group only while inactive, then reattach.
-- Never reset unrelated consumer groups.
-- If ClickHouse is down longer than Kafka retention, old Kafka events may no longer be recoverable from this topic.
-- Raw ClickHouse data expires after seven days; parsed history remains.
-- Future Hudi/HDFS is the intended durable raw archive if long-term raw retention becomes a requirement.
+```text
+ClickHouse restart -> resume from committed group offsets.
+Replay within Kafka retention -> stop/detach consumer, reset only this dedicated group while inactive, reattach.
+Never reset unrelated groups.
+ClickHouse outage > Kafka retention -> older topic events may no longer be recoverable from Kafka.
+Raw ClickHouse payload -> expires after 7 days.
+Parsed event history -> remains.
+Future Hudi/HDFS -> durable raw archive if approved/required.
+```
 
-- [ ] **Step 3: Run focused and full tests**
+- [ ] **Step 3: Run focused and full verification**
 
 ```bash
 python -m pytest -q tests/test_efris_esb_stream_contract.py
@@ -614,43 +530,30 @@ bash -n scripts/verify_efris_esb_stream.sh
 node --check app/static/js/simulator_controller.js
 ```
 
-Expected: all existing repository tests continue to pass; the stream contract test passes.
+Expected: all pass.
 
-- [ ] **Step 4: Commit documentation**
+- [ ] **Step 4: Commit the runbook**
 
 ```bash
 git add docs/efris-esb-stream.md README.md
 git commit -m "docs: add EFRIS ESB stream runbook"
 ```
 
-- [ ] **Step 5: Final implementation verification before PR**
-
-Record evidence for the PR:
+- [ ] **Step 5: Record PR evidence before claiming completion**
 
 ```text
-Kafka topic config: 7-day retention
-Initial retained offsets: captured
+Kafka initial earliest/end offsets: captured
 Consumer starts at earliest retained offsets: proven
-Consumer lag after catch-up: near zero/zero
+Initial retained backlog fully present in raw: proven
+Consumer lag after catch-up: zero/near-zero
 Raw unique Kafka identities: N
 Parsed valid unique Kafka identities: N
-Malformed/invalid JSON accounted: N
-Success events returnCode=00 -> is_success=1: proven
-New live ESB event arrives automatically in ClickHouse: proven
-Raw TTL: 7 days
+Invalid JSON identities: N
+returnCode=00 -> is_success=1: proven
+Live ESB offset advances automatically: proven
+Kafka EAI_Efris retention: 7 days
+ClickHouse raw TTL: 7 days
 Full pytest: pass
 ```
 
-Do not claim the feature complete if any of those runtime checks are missing.
-
----
-
-## Notes for the Implementer
-
-1. **Do not edit `compose.yaml` for this feature unless runtime testing proves it unavoidable.** The RHEL working tree may carry a deliberate local advertised-listener change for external ESB access, and this ingestion path can use Docker-internal `kafka:19092`.
-2. **Do not hard-code credentials** in SQL, shell scripts, docs, tests, or commits.
-3. **Do not decrypt success content.** The raw table holds the original message for seven days; `efris_event` stores only content presence/length/encryption flags.
-4. **Do not silently skip retained Kafka history.** The earliest-offset bootstrap is a hard requirement.
-5. **Do not call the path exactly once.** Raw delivery is at-least-once. `efris_event` uses Kafka identity plus `ReplacingMergeTree` for eventual analytical deduplication; verification must still measure duplicate deliveries explicitly.
-6. **Do not increase Kafka partitions as part of this implementation.** One partition is sufficient to bring the live stream online. If throughput later requires more, increase the topic partitions deliberately and then raise `kafka_num_consumers` no higher than the partition count.
-7. **Keep the UI out of this PR.** First prove real ESB traffic is flowing and modeled correctly. The live operational dashboard becomes the next bounded feature.
+Do not claim operational completion if any runtime evidence above is missing.
