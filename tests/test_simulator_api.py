@@ -28,6 +28,9 @@ class FakeService:
     def stop(self, run_id):
         return {"run_id": run_id, "command": "stop"}
 
+    def close_gap(self, run_id):
+        return {"run_id": run_id, "status": "cdc_gap", "gap_events": 236}
+
 
 def app_with(service):
     app = FastAPI()
@@ -66,3 +69,9 @@ def test_control_routes():
     assert client.post("/api/simulator/runs/EFR-1/pause").json()["command"] == "pause"
     assert client.post("/api/simulator/runs/EFR-1/resume").json()["command"] == "run"
     assert client.post("/api/simulator/runs/EFR-1/stop").json()["command"] == "stop"
+
+
+def test_close_cdc_gap_route():
+    response = TestClient(app_with(FakeService())).post("/api/simulator/runs/EFR-1/close-gap")
+    assert response.status_code == 200
+    assert response.json() == {"run_id": "EFR-1", "status": "cdc_gap", "gap_events": 236}
