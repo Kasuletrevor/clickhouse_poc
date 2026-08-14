@@ -13,11 +13,20 @@ ch_query() {
     sh -lc 'clickhouse-client --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --query "$EFRIS_VERIFY_QUERY"'
 }
 
-echo '=== KAFKA TOPIC OFFSETS ==='
+echo '=== KAFKA EARLIEST RETAINED OFFSETS ==='
 sudo docker exec "$KAFKA_CONTAINER" \
   /opt/kafka/bin/kafka-get-offsets.sh \
   --bootstrap-server "$KAFKA_BOOTSTRAP" \
-  --topic "$EFRIS_TOPIC"
+  --topic "$EFRIS_TOPIC" \
+  --time earliest
+
+echo
+echo '=== KAFKA LOG-END OFFSETS ==='
+sudo docker exec "$KAFKA_CONTAINER" \
+  /opt/kafka/bin/kafka-get-offsets.sh \
+  --bootstrap-server "$KAFKA_BOOTSTRAP" \
+  --topic "$EFRIS_TOPIC" \
+  --time latest
 
 echo
 echo '=== CLICKHOUSE CONSUMER GROUP ==='
@@ -34,6 +43,10 @@ ch_query "SELECT name, engine FROM system.tables WHERE database='analytics' AND 
 echo
 echo '=== STORAGE COUNTS ==='
 ch_query "SELECT 'raw_efris_esb' AS object, count() AS rows FROM analytics.raw_efris_esb UNION ALL SELECT 'efris_event', count() FROM analytics.efris_event UNION ALL SELECT 'v_efris_transactions', count() FROM analytics.v_efris_transactions UNION ALL SELECT 'v_efris_success_transactions', count() FROM analytics.v_efris_success_transactions UNION ALL SELECT 'v_efris_error_transactions', count() FROM analytics.v_efris_error_transactions FORMAT PrettyCompact"
+
+echo
+echo '=== CLICKHOUSE OFFSET COVERAGE ==='
+ch_query "SELECT kafka_partition, min(kafka_offset) AS min_offset_seen, max(kafka_offset) AS max_offset_seen, count() AS raw_rows FROM analytics.raw_efris_esb GROUP BY kafka_partition ORDER BY kafka_partition FORMAT PrettyCompact"
 
 echo
 echo '=== PARSE / LINEAGE HEALTH ==='
