@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from datetime import datetime, timezone
 
 from app.clickhouse import AnalyticsOperationError, AnalyticsUnavailableError
 from app.errors import APIError
@@ -8,6 +9,8 @@ from app.oracle import SourceOperationError, SourceUnavailableError
 from app.simulator.manager import SimulatorManager, SimulatorStateError
 from app.simulator.models import RunConfig, RunRecord, utc_now_iso
 from app.simulator.store import ActiveRunExists, RunNotFound, RunStore
+
+CDC_GAP_GRACE_SECONDS = 30
 
 
 class SimulatorService:
@@ -65,6 +68,71 @@ class SimulatorService:
     def stop(self, run_id: str) -> dict:
         return self._control(run_id, "stop")
 
+    @staticmethod
+    def _draining_for_seconds(run: RunRecord) -> float:
+        if run.status != "draining" or not run.last_heartbeat:
+            return 0.0
+        try:
+            started = datetime.fromisoformat(run.last_heartbeat)
+        except ValueError:
+            return 0.0
+        if started.tzinfo is None:
+            started = started.replace(tzinfo=timezone.utc)
+        return max(0.0, (datetime.now(timezone.utc) - started).total_seconds())
+
+    def close_gap(self, run_id: str) -> dict:
+        try:
+            run = self.store.get_run(run_id)
+        except RunNotFound as exc:
+            raise APIError(404, "simulation_not_found", f"Simulation {run_id} does not exist.") from exc
+
+        if run.status != "draining":
+            raise APIError(
+                409,
+                "simulation_cdc_gap_requires_draining",
+                "Only a draining simulation can be closed with a CDC gap.",
+                {"run": self._record_view(run)},
+            )
+
+        if self._draining_for_seconds(run) < CDC_GAP_GRACE_SECONDS:
+            raise APIError(
+                409,
+                "simulation_cdc_gap_still_draining",
+                "CDC is still within the normal drain window. Wait before declaring a permanent gap.",
+                {"run": self._record_view(run)},
+            )
+
+        try:
+            oracle_summary = self.repository.oracle_run_summary(run.source_prefix)
+            clickhouse_summary = self.repository.clickhouse_run_summary(run.source_prefix)
+        except (SourceUnavailableError, SourceOperationError, AnalyticsUnavailableError, AnalyticsOperationError) as exc:
+            raise APIError(
+                503,
+                "simulation_cdc_gap_unverifiable",
+                "Oracle and ClickHouse must both be reachable before recording a CDC gap.",
+            ) from exc
+
+        oracle_committed = int(oracle_summary.get("oracle_committed") or 0)
+        clickhouse_received = int(clickhouse_summary.get("clickhouse_received") or 0)
+        gap_events = max(oracle_committed - clickhouse_received, 0)
+        if gap_events == 0:
+            raise APIError(
+                409,
+                "simulation_no_cdc_gap",
+                "Oracle and ClickHouse are already reconciled for this run.",
+            )
+
+        closed = self.store.set_fields(
+            run_id,
+            status="cdc_gap",
+            finished_at=utc_now_iso(),
+            gap_events=gap_events,
+            gap_oracle_committed=oracle_committed,
+            gap_clickhouse_received=clickhouse_received,
+            gap_reason="cdc_continuity_lost",
+        )
+        return self._record_view(closed)
+
     def events(self, run_id: str, limit: int = 40) -> list[dict]:
         try:
             run = self.store.get_run(run_id)
@@ -84,6 +152,17 @@ class SimulatorService:
             self._health_cache = self.repository.pipeline_health()
             self._health_cached_at = now
         return self._health_cache
+
+    def _decorate_gap_controls(self, view: dict, run: RunRecord, source_exact: bool, destination_available: bool) -> None:
+        draining_for = self._draining_for_seconds(run)
+        view["draining_for_seconds"] = round(draining_for, 1)
+        view["can_close_cdc_gap"] = bool(
+            run.status == "draining"
+            and source_exact
+            and destination_available
+            and view["in_flight"] > 0
+            and draining_for >= CDC_GAP_GRACE_SECONDS
+        )
 
     def status(self) -> dict:
         health = self._health()
@@ -119,6 +198,7 @@ class SimulatorService:
         view["source_count_exact"] = source_exact
         view["destination_available"] = destination_available
         view["throughput"] = throughput
+        self._decorate_gap_controls(view, active, source_exact, destination_available)
 
         if active.status == "draining" and source_exact and destination_available and view["clickhouse_received"] >= view["oracle_committed"]:
             active = self.store.set_fields(active.run_id, status="completed", finished_at=utc_now_iso())
@@ -126,6 +206,7 @@ class SimulatorService:
             view["source_count_exact"] = True
             view["destination_available"] = True
             view["throughput"] = throughput
+            self._decorate_gap_controls(view, active, True, True)
 
         try:
             recent = self.repository.recent_events(active.source_prefix, 40)
@@ -151,7 +232,8 @@ class SimulatorService:
             "max_ms": None,
         }
         clickhouse_received = int(ch.get("clickhouse_received") or 0)
-        in_flight = max(oracle_committed - clickhouse_received, 0)
+        outstanding = max(oracle_committed - clickhouse_received, 0)
+        in_flight = 0 if run.status == "cdc_gap" else outstanding
         delivery_percent = round(clickhouse_received / oracle_committed * 100, 2) if oracle_committed else 0.0
         target = run.target_events
         progress_percent = round(min(run.generated / target * 100, 100), 2) if target else None
