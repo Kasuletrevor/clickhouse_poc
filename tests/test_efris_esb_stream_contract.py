@@ -38,6 +38,35 @@ def test_clickhouse_schema_contract():
     assert "analytics.v_efris_esb_invalid_messages" in sql
 
 
+def test_business_views_filter_before_final_join():
+    sql = SCHEMA.read_text()
+
+    success_start = sql.index(
+        "CREATE VIEW IF NOT EXISTS analytics.v_efris_success_transactions AS"
+    )
+    error_start = sql.index(
+        "CREATE VIEW IF NOT EXISTS analytics.v_efris_error_transactions AS"
+    )
+    invalid_start = sql.index(
+        "CREATE VIEW IF NOT EXISTS analytics.v_efris_esb_invalid_messages AS"
+    )
+
+    success_sql = sql[success_start:error_start]
+    error_sql = sql[error_start:invalid_start]
+
+    assert "FROM analytics.v_efris_transactions" not in success_sql
+    assert "FROM analytics.efris_event FINAL" in success_sql
+    assert "WHERE is_success = 1" in success_sql
+    assert "LEFT JOIN" in success_sql
+    assert success_sql.index("WHERE is_success = 1") < success_sql.index("LEFT JOIN")
+
+    assert "FROM analytics.v_efris_transactions" not in error_sql
+    assert "FROM analytics.efris_event FINAL" in error_sql
+    assert "WHERE is_success = 0" in error_sql
+    assert "LEFT JOIN" in error_sql
+    assert error_sql.index("WHERE is_success = 0") < error_sql.index("LEFT JOIN")
+
+
 def test_start_consumer_preserves_kafka_lineage():
     sql = START.read_text()
     assert "efris_esb_kafka_to_raw_mv" in sql
