@@ -152,7 +152,13 @@ WHERE tupleElement(item, 1) NOT IN
     FROM analytics.dim_efris_interface
 );
 
-CREATE VIEW IF NOT EXISTS analytics.v_efris_transactions AS
+-- Recreate business views so re-applying this schema also repairs existing deployments.
+-- Keep FINAL inside subqueries and apply success/error filtering before the LEFT JOIN.
+DROP VIEW IF EXISTS analytics.v_efris_success_transactions;
+DROP VIEW IF EXISTS analytics.v_efris_error_transactions;
+DROP VIEW IF EXISTS analytics.v_efris_transactions;
+
+CREATE VIEW analytics.v_efris_transactions AS
 SELECT
     e.event_id,
     e.event_time,
@@ -177,19 +183,165 @@ SELECT
     e.kafka_offset,
     e.kafka_timestamp,
     e.ingested_at
-FROM analytics.efris_event AS e FINAL
-LEFT JOIN analytics.dim_efris_interface AS d FINAL
+FROM
+(
+    SELECT
+        event_id,
+        event_time,
+        interface_code,
+        tin,
+        taxpayer_id,
+        legal_name,
+        taxpayer_user_id,
+        device_no,
+        return_code,
+        return_message,
+        normalized_return_message,
+        is_success,
+        app_id,
+        version,
+        content_present,
+        content_bytes,
+        content_encrypted,
+        kafka_topic,
+        kafka_partition,
+        kafka_offset,
+        kafka_timestamp,
+        ingested_at
+    FROM analytics.efris_event FINAL
+) AS e
+LEFT JOIN
+(
+    SELECT
+        interface_code,
+        interface_name
+    FROM analytics.dim_efris_interface FINAL
+) AS d
     ON e.interface_code = d.interface_code;
 
-CREATE VIEW IF NOT EXISTS analytics.v_efris_success_transactions AS
-SELECT *
-FROM analytics.v_efris_transactions
-WHERE is_success = 1;
+CREATE VIEW analytics.v_efris_success_transactions AS
+SELECT
+    e.event_id,
+    e.event_time,
+    e.interface_code,
+    d.interface_name,
+    e.tin,
+    e.taxpayer_id,
+    e.legal_name,
+    e.taxpayer_user_id,
+    e.device_no,
+    e.return_code,
+    e.return_message,
+    e.normalized_return_message,
+    e.is_success,
+    e.app_id,
+    e.version,
+    e.content_present,
+    e.content_bytes,
+    e.content_encrypted,
+    e.kafka_topic,
+    e.kafka_partition,
+    e.kafka_offset,
+    e.kafka_timestamp,
+    e.ingested_at
+FROM
+(
+    SELECT
+        event_id,
+        event_time,
+        interface_code,
+        tin,
+        taxpayer_id,
+        legal_name,
+        taxpayer_user_id,
+        device_no,
+        return_code,
+        return_message,
+        normalized_return_message,
+        is_success,
+        app_id,
+        version,
+        content_present,
+        content_bytes,
+        content_encrypted,
+        kafka_topic,
+        kafka_partition,
+        kafka_offset,
+        kafka_timestamp,
+        ingested_at
+    FROM analytics.efris_event FINAL
+    WHERE is_success = 1
+) AS e
+LEFT JOIN
+(
+    SELECT
+        interface_code,
+        interface_name
+    FROM analytics.dim_efris_interface FINAL
+) AS d
+    ON e.interface_code = d.interface_code;
 
-CREATE VIEW IF NOT EXISTS analytics.v_efris_error_transactions AS
-SELECT *
-FROM analytics.v_efris_transactions
-WHERE is_success = 0;
+CREATE VIEW analytics.v_efris_error_transactions AS
+SELECT
+    e.event_id,
+    e.event_time,
+    e.interface_code,
+    d.interface_name,
+    e.tin,
+    e.taxpayer_id,
+    e.legal_name,
+    e.taxpayer_user_id,
+    e.device_no,
+    e.return_code,
+    e.return_message,
+    e.normalized_return_message,
+    e.is_success,
+    e.app_id,
+    e.version,
+    e.content_present,
+    e.content_bytes,
+    e.content_encrypted,
+    e.kafka_topic,
+    e.kafka_partition,
+    e.kafka_offset,
+    e.kafka_timestamp,
+    e.ingested_at
+FROM
+(
+    SELECT
+        event_id,
+        event_time,
+        interface_code,
+        tin,
+        taxpayer_id,
+        legal_name,
+        taxpayer_user_id,
+        device_no,
+        return_code,
+        return_message,
+        normalized_return_message,
+        is_success,
+        app_id,
+        version,
+        content_present,
+        content_bytes,
+        content_encrypted,
+        kafka_topic,
+        kafka_partition,
+        kafka_offset,
+        kafka_timestamp,
+        ingested_at
+    FROM analytics.efris_event FINAL
+    WHERE is_success = 0
+) AS e
+LEFT JOIN
+(
+    SELECT
+        interface_code,
+        interface_name
+    FROM analytics.dim_efris_interface FINAL
+) AS d
+    ON e.interface_code = d.interface_code;
 
 CREATE VIEW IF NOT EXISTS analytics.v_efris_esb_invalid_messages AS
 SELECT
