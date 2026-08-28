@@ -28,3 +28,11 @@ def test_payments_cdc_page_reuses_simulator_visual_language_for_the_payment_case
     assert "Payment transactions" in page
     assert "Taxpayer station changes" in page
     assert "EFRIS Simulator Control Room" not in page
+
+
+def test_payments_cdc_page_is_wired_to_the_streaming_poc_backend():
+    page = PAGE_JS.read_text()
+
+    assert 'api("/api/streaming-poc/status")' in page
+    assert 'api("/api/streaming-poc/start"' in page
+    assert 'api("/api/streaming-poc/stop"' in page
