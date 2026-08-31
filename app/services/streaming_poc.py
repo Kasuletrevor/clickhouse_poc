@@ -54,11 +54,23 @@ class StreamingPocService:
         except FileNotFoundError:
             return 0
 
+    def _elapsed_seconds(self) -> float:
+        if not self._run or not self._run.get("started_at"):
+            return 0.0
+        try:
+            started = datetime.fromisoformat(self._run["started_at"])
+            if started.tzinfo is None:
+                started = started.replace(tzinfo=timezone.utc)
+            return max((datetime.now(timezone.utc) - started).total_seconds(), 0.0)
+        except ValueError:
+            return 0.0
+
     def _run_view(self, running: bool, arrivals: dict) -> dict | None:
         if not self._run:
             return None
         generated = self._source_generated()
         received = int(arrivals.get("received") or 0)
+        elapsed = self._elapsed_seconds()
         return {
             **self._run,
             "status": "running" if running else self._state,
@@ -67,6 +79,8 @@ class StreamingPocService:
             "in_flight": max(generated - received, 0),
             "payments_received": int(arrivals.get("payments") or 0),
             "taxpayer_changes_received": int(arrivals.get("taxpayer_changes") or 0),
+            "actual_source_rate": round(generated / elapsed, 2) if elapsed > 0 else 0.0,
+            "actual_clickhouse_rate": round(received / elapsed, 2) if elapsed > 0 else 0.0,
         }
 
     def _launch_environment(self) -> dict:
@@ -102,8 +116,14 @@ class StreamingPocService:
             command = [
                 sys.executable,
                 str(self.project_root / "simulator" / "run_load.py"),
-                "--transactions-per-minute",
+                "--transactions-per-second",
                 str(float(payload.rate)),
+                "--payment-create-pct",
+                str(float(payload.payment_create_pct)),
+                "--status-update-pct",
+                str(float(payload.status_update_pct)),
+                "--taxpayer-move-pct",
+                str(float(payload.taxpayer_move_pct)),
             ]
             try:
                 log_handle = self.log_path.open("ab", buffering=0)
@@ -133,6 +153,9 @@ class StreamingPocService:
             self._run = {
                 "rate": float(payload.rate),
                 "duration_seconds": int(payload.duration_seconds),
+                "payment_create_pct": float(payload.payment_create_pct),
+                "status_update_pct": float(payload.status_update_pct),
+                "taxpayer_move_pct": float(payload.taxpayer_move_pct),
                 "started_at": self._now_iso(),
                 "pid": int(self._process.pid),
             }
