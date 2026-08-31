@@ -1,11 +1,67 @@
+import { api } from "./api.js";
+
 const nf = new Intl.NumberFormat("en-UG", {maximumFractionDigits: 0});
+const one = new Intl.NumberFormat("en-UG", {minimumFractionDigits: 1, maximumFractionDigits: 1});
+const escapeHtml = value => String(value ?? "").replace(/[&<>'"]/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[ch]));
+
+function latency(value) {
+  if (value === null || value === undefined) return "—";
+  const ms = Number(value);
+  return ms >= 1000 ? `${(ms / 1000).toFixed(2)}s` : `${nf.format(ms)}ms`;
+}
 
 export class PaymentsCdcSimulatorPage {
   constructor(shell) {
     this.shell = shell;
+    this.timer = null;
+    this.destroyed = false;
+    this.loading = false;
   }
 
   async render() {
+    this.destroyed = false;
+    await this.refresh(true);
+    this.schedulePoll();
+    return this;
+  }
+
+  destroy() {
+    this.destroyed = true;
+    if (this.timer) window.clearTimeout(this.timer);
+    this.timer = null;
+  }
+
+  schedulePoll() {
+    if (this.destroyed) return;
+    if (this.timer) window.clearTimeout(this.timer);
+    this.timer = window.setTimeout(async () => {
+      await this.refresh(false);
+      this.schedulePoll();
+    }, document.hidden ? 5000 : 1000);
+  }
+
+  async refresh(initial = false) {
+    if (this.loading || this.destroyed) return;
+    this.loading = true;
+    try {
+      const data = await api("/api/streaming-poc/status");
+      if (!this.destroyed) this.renderState(data, initial);
+    } catch (error) {
+      if (!this.destroyed) this.renderUnavailable(error.message);
+    } finally {
+      this.loading = false;
+    }
+  }
+
+  renderState(data, initial = false) {
+    const running = data.state === "running" && Boolean(data.active);
+    const run = data.active || data.run || {};
+    const generated = Number(run.source_generated || 0);
+    const received = Number(run.clickhouse_received || 0);
+    const inFlight = Number(run.in_flight || 0);
+    const rate = Number(run.rate || 10);
+    const durationMinutes = run.duration_seconds ? Number(run.duration_seconds) / 60 : 10;
+
     this.shell.content.innerHTML = `<div class="sim-shell">
       <section class="sim-idle-hero">
         <div>
@@ -19,38 +75,35 @@ export class PaymentsCdcSimulatorPage {
       </section>
 
       <div class="sim-inline-notice">
-        <strong>POC page copy</strong>
-        <span>This first pass duplicates the existing Simulator visual language for the payments and taxpayer CDC use case. Controls will be wired to the existing Oracle simulator after the page layout is approved.</span>
+        <strong>${running ? "Source workload running" : data.state === "failed" ? "Source workload stopped unexpectedly" : "Real CDC path"}</strong>
+        <span>${running ? `Generating approximately ${one.format(rate)} source events per minute. The web app writes only to Oracle; Debezium, Kafka and ClickHouse carry the change downstream.` : "Start a controlled workload below. The simulator writes only to Oracle and never publishes directly to Kafka or ClickHouse."}</span>
       </div>
 
       <div class="sim-idle-grid">
         <section class="sim-panel sim-config-panel">
           <div class="sim-panel-head">
-            <div><p class="eyebrow">Source workload</p><h3>Configure Simulation</h3></div>
+            <div><p class="eyebrow">Source workload</p><h3>${running ? "Simulation Running" : "Configure Simulation"}</h3></div>
             <span class="sim-safe-chip">Oracle source</span>
           </div>
-          <form class="sim-config-form" id="payments-cdc-preview-form">
+          <form class="sim-config-form" id="payments-cdc-form">
             <label>
               <span>Target rate</span>
-              <div class="sim-input-unit"><input class="input" type="number" min="1" value="10"><em>events/min</em></div>
-              <small>Creates real source transactions in the Oracle POC database.</small>
+              <div class="sim-input-unit"><input id="payments-cdc-rate" class="input" type="number" min="0.1" max="1000" step="0.1" value="${escapeHtml(rate)}" ${running ? "disabled" : ""}><em>events/min</em></div>
+              <small>Each generated action is committed to the Oracle POC database.</small>
             </label>
             <label>
               <span>Duration</span>
-              <div class="sim-input-unit"><input class="input" type="number" min="1" value="10"><em>minutes</em></div>
-              <small>Duration of the controlled source workload.</small>
-            </label>
-            <label>
-              <span>Taxpayer station movement</span>
-              <div class="sim-input-unit"><input class="input" type="number" min="0" max="100" value="5"><em>%</em></div>
-              <small>The terminal simulator already mixes payment creation, status updates and taxpayer station changes.</small>
+              <div class="sim-input-unit"><input id="payments-cdc-duration" class="input" type="number" min="0" max="1440" step="1" value="${escapeHtml(durationMinutes)}" ${running ? "disabled" : ""}><em>minutes</em></div>
+              <small>Use 0 for continuous mode; otherwise the backend stops the workload automatically.</small>
             </label>
             <div class="sim-target-preview">
               <span>Traffic mix</span>
               <strong>80 / 15 / 5</strong>
               <small>Payment create / status update / taxpayer move</small>
             </div>
-            <button class="btn btn-primary sim-start-button" type="submit"><span>▶</span> Start Simulation</button>
+            ${running
+              ? `<button id="payments-cdc-stop" class="btn btn-danger sim-start-button" type="button"><span>■</span> Stop Simulation</button>`
+              : `<button class="btn btn-primary sim-start-button" type="submit"><span>▶</span> Start Simulation</button>`}
           </form>
         </section>
 
@@ -58,68 +111,110 @@ export class PaymentsCdcSimulatorPage {
           <section class="sim-panel">
             <div class="sim-panel-head"><div><p class="eyebrow">Demo scope</p><h3>CDC Use Cases</h3></div></div>
             <div class="sim-pop-grid">
-              ${this.scopeCard("PAY", "Payment transactions")}
+              ${this.scopeCard(run.payments_received ?? "PAY", "Payment transactions")}
               ${this.scopeCard("STS", "Payment status updates")}
-              ${this.scopeCard("TIN", "Taxpayer station changes")}
-              ${this.scopeCard("CDC", "End-to-end streaming")}
+              ${this.scopeCard(run.taxpayer_changes_received ?? "TIN", "Taxpayer station changes")}
+              ${this.scopeCard(received || "CDC", "Events received")}
             </div>
           </section>
-          ${this.healthPanel()}
+          ${this.healthPanel(data.health || {})}
         </div>
       </div>
 
-      <section class="sim-reconcile-grid" aria-label="CDC movement preview">
-        ${this.reconcileCard("SOURCE", "Oracle", 0, "committed", "Waiting for a simulated source transaction", "source")}
-        <div class="sim-flight-card"><span class="sim-flow-arrow">→</span><p>IN FLIGHT</p><strong>0</strong><small>Debezium → Kafka</small><span class="sim-flow-arrow right">→</span></div>
-        ${this.reconcileCard("DESTINATION", "ClickHouse", 0, "received", "Waiting for CDC delivery", "destination")}
+      <section class="sim-reconcile-grid" aria-label="CDC movement">
+        ${this.reconcileCard("SOURCE", "Oracle", generated, "committed actions", running ? "Live workload output" : run.started_at ? "Last workload" : "Waiting for a simulation", "source")}
+        <div class="sim-flight-card"><span class="sim-flow-arrow">→</span><p>IN FLIGHT</p><strong>${nf.format(inFlight)}</strong><small>Debezium → Kafka</small><span class="sim-flow-arrow right">→</span></div>
+        ${this.reconcileCard("DESTINATION", "ClickHouse", received, "CDC events received", received ? "Arrived through Kafka" : "Waiting for CDC delivery", "destination")}
       </section>
 
       <section class="sim-panel sim-events-panel">
         <div class="sim-panel-head">
           <div><p class="eyebrow">Event journey</p><h3>Live Payment & Taxpayer Events</h3></div>
-          <span class="sim-panel-note">Oracle → Debezium → Kafka → ClickHouse</span>
+          <span class="sim-panel-note">${running ? "1s refresh" : "latest run"}</span>
         </div>
-        <div class="sim-events-empty">
-          <span>⌁</span>
-          <strong>Waiting for the first simulated transaction</strong>
-          <p>When the simulator is wired, each Oracle payment or taxpayer change will appear here as it moves across the CDC pipeline.</p>
-        </div>
+        ${this.eventFeed(data.recent_events || [])}
       </section>
     </div>`;
 
-    document.querySelector("#payments-cdc-preview-form")?.addEventListener("submit", event => {
-      event.preventDefault();
-      this.shell.toast("Preview only: simulator controls will be wired after this page layout is approved");
-    });
+    const form = document.querySelector("#payments-cdc-form");
+    if (!running && form) form.onsubmit = event => this.start(event);
+    document.querySelector("#payments-cdc-stop")?.addEventListener("click", () => this.stop());
 
-    return this;
+    if (initial && running) this.shell.toast("Reconnected to the active Payments CDC simulation");
   }
 
-  destroy() {}
+  async start(event) {
+    event.preventDefault();
+    const button = event.currentTarget.querySelector("button[type=submit]");
+    button.disabled = true;
+    button.innerHTML = `<span class="sim-spinner"></span> Starting…`;
+    const payload = {
+      rate: Number(document.querySelector("#payments-cdc-rate").value),
+      duration_seconds: Math.round(Number(document.querySelector("#payments-cdc-duration").value) * 60),
+    };
+    try {
+      await api("/api/streaming-poc/start", {method:"POST", body:JSON.stringify(payload)});
+      this.shell.toast("Payments CDC source workload started");
+      await this.refresh(false);
+    } catch (error) {
+      this.shell.toast(error.message, true);
+      button.disabled = false;
+      button.innerHTML = `<span>▶</span> Start Simulation`;
+    }
+  }
 
-  scopeCard(code, label) {
-    return `<div class="sim-pop-card"><strong>${code}</strong><span>${label}</span></div>`;
+  async stop() {
+    const button = document.querySelector("#payments-cdc-stop");
+    if (button) { button.disabled = true; button.textContent = "Stopping…"; }
+    try {
+      await api("/api/streaming-poc/stop", {method:"POST"});
+      this.shell.toast("Payments CDC source workload stopped");
+      await this.refresh(false);
+    } catch (error) {
+      this.shell.toast(error.message, true);
+      if (button) { button.disabled = false; button.innerHTML = `<span>■</span> Stop Simulation`; }
+    }
+  }
+
+  scopeCard(value, label) {
+    const rendered = typeof value === "number" ? nf.format(value) : escapeHtml(value);
+    return `<div class="sim-pop-card"><strong>${rendered}</strong><span>${escapeHtml(label)}</span></div>`;
   }
 
   reconcileCard(kicker, name, count, verb, note, cls) {
-    return `<div class="sim-reconcile-card ${cls}"><p>${kicker}</p><h3>${name}</h3><strong>${nf.format(Number(count || 0))}</strong><span>${verb}</span><small>${note}</small></div>`;
+    return `<div class="sim-reconcile-card ${cls}"><p>${kicker}</p><h3>${name}</h3><strong>${nf.format(Number(count || 0))}</strong><span>${escapeHtml(verb)}</span><small>${escapeHtml(note)}</small></div>`;
   }
 
-  healthPanel() {
-    const stages = [
-      ["Oracle", "Source database ready"],
-      ["Debezium", "CDC connector"],
-      ["Kafka", "Streaming transport"],
-      ["ClickHouse", "Analytics destination"],
-    ];
+  healthPanel(health) {
+    const stages = [["oracle","Oracle"],["debezium","Debezium"],["kafka","Kafka"],["clickhouse","ClickHouse"]];
     return `<section class="sim-panel sim-health-panel">
-      <div class="sim-panel-head">
-        <div><p class="eyebrow">Pipeline</p><h3>CDC Components</h3></div>
-        <span class="sim-panel-note">same POC path</span>
-      </div>
+      <div class="sim-panel-head"><div><p class="eyebrow">Pipeline</p><h3>CDC Components</h3></div><span class="sim-panel-note">live health</span></div>
       <div class="sim-health-grid">
-        ${stages.map(([label, detail]) => `<div class="sim-health-card health-unknown"><span class="sim-health-icon">•</span><div><strong>${label}</strong><b>READY</b><small>${detail}</small></div></div>`).join("")}
+        ${stages.map(([key,label]) => {
+          const item = health[key] || {status:"unknown", detail:"Status unknown"};
+          const icon = item.status === "healthy" ? "✓" : item.status === "degraded" ? "!" : item.status === "unavailable" ? "×" : "?";
+          return `<div class="sim-health-card health-${escapeHtml(item.status)}"><span class="sim-health-icon">${icon}</span><div><strong>${label}</strong><b>${escapeHtml(item.status).toUpperCase()}</b><small>${escapeHtml(item.detail)}</small></div></div>`;
+        }).join("")}
       </div>
     </section>`;
+  }
+
+  eventFeed(events) {
+    if (!events.length) return `<div class="sim-events-empty"><span>⌁</span><strong>Waiting for streamed events</strong><p>Once Oracle commits an action, the matching ClickHouse CDC event will appear here with Kafka lineage.</p></div>`;
+    return `<div class="sim-event-list">${events.map(event => `<article class="sim-event-row received">
+      <div class="sim-event-main">
+        <span class="sim-seq">${escapeHtml(event.event_type)}</span>
+        <span class="sim-event-identity"><strong>${escapeHtml(event.entity_id)}</strong><small>${escapeHtml(event.taxpayer_id)}</small></span>
+        <span class="sim-code">${escapeHtml(event.action)}</span>
+        <span class="sim-event-message">${escapeHtml(event.detail)}</span>
+        <span class="sim-event-path"><b>Oracle ✓</b><em>→</em><b class="arrived">ClickHouse ✓</b><small>${latency(event.cdc_latency_ms)}</small></span>
+        <span class="sim-chevron">P${escapeHtml(event.kafka_partition ?? "—")} / ${escapeHtml(event.kafka_offset ?? "—")}</span>
+      </div>
+    </article>`).join("")}</div>`;
+  }
+
+  renderUnavailable(message) {
+    this.shell.content.innerHTML = `<div class="sim-shell"><section class="analytics-unavailable"><div class="analytics-unavailable-icon">!</div><p class="eyebrow">Streaming POC unavailable</p><h2>Backend status cannot be loaded</h2><p>${escapeHtml(message)}</p><button class="btn btn-primary" id="payments-cdc-retry">Retry</button></section></div>`;
+    document.querySelector("#payments-cdc-retry")?.addEventListener("click", () => this.refresh(true));
   }
 }
