@@ -15,12 +15,14 @@ from app.repositories.efris_events import OracleEfrisEventRepository
 from app.repositories.payments import OraclePaymentRepository
 from app.repositories.simulator import SimulatorRepository
 from app.repositories.stations import OracleStationRepository
+from app.repositories.streaming_poc import StreamingPocRepository
 from app.repositories.taxpayers import OracleTaxpayerRepository
 from app.routes.dashboard import router as dashboard_router
 from app.routes.efris_errors import router as efris_errors_router
 from app.routes.payments import router as payments_router
 from app.routes.simulator import router as simulator_router
 from app.routes.stations import router as stations_router
+from app.routes.streaming_poc import router as streaming_poc_router
 from app.routes.taxpayers import router as taxpayers_router
 from app.services.dashboard import DashboardService
 from app.services.efris_errors import EfrisErrorService
@@ -28,6 +30,7 @@ from app.services.efris_events import EfrisEventService
 from app.services.payments import PaymentService
 from app.services.simulator import SimulatorService
 from app.services.stations import StationService
+from app.services.streaming_poc import StreamingPocService
 from app.services.taxpayers import TaxpayerService
 from app.simulator.manager import SimulatorManager
 from app.simulator.store import RunStore
@@ -85,6 +88,20 @@ def default_simulator_service() -> SimulatorService:
     return SimulatorService(store, manager, repository)
 
 
+def default_streaming_poc_service() -> StreamingPocService:
+    settings = get_settings()
+    oracle_db = OracleDatabase(settings)
+    clickhouse_db = ClickHouseDatabase(settings)
+    health_repository = SimulatorRepository(oracle_db, clickhouse_db, settings)
+    repository = StreamingPocRepository(clickhouse_db)
+    return StreamingPocService(
+        repository,
+        health_repository,
+        settings,
+        PROJECT_ROOT,
+    )
+
+
 def create_app(
     payment_service=None,
     taxpayer_service=None,
@@ -93,8 +110,9 @@ def create_app(
     efris_error_service=None,
     efris_event_service=None,
     simulator_service=None,
+    streaming_poc_service=None,
 ) -> FastAPI:
-    app = FastAPI(title="Internal Transaction Application", version="0.7.0")
+    app = FastAPI(title="Internal Transaction Application", version="0.8.0")
     app.state.payment_service = payment_service or default_payment_service()
     app.state.taxpayer_service = taxpayer_service or default_taxpayer_service()
     app.state.station_service = station_service or default_station_service()
@@ -102,6 +120,7 @@ def create_app(
     app.state.efris_error_service = efris_error_service or default_efris_error_service()
     app.state.efris_event_service = efris_event_service or default_efris_event_service()
     app.state.simulator_service = simulator_service or default_simulator_service()
+    app.state.streaming_poc_service = streaming_poc_service or default_streaming_poc_service()
     app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
     templates = Jinja2Templates(directory=BASE_DIR / "templates")
     app.include_router(dashboard_router)
@@ -110,6 +129,7 @@ def create_app(
     app.include_router(taxpayers_router)
     app.include_router(stations_router)
     app.include_router(simulator_router)
+    app.include_router(streaming_poc_router)
 
     @app.exception_handler(APIError)
     async def api_error_handler(_request: Request, exc: APIError):
