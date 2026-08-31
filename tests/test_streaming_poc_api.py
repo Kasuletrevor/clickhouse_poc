@@ -34,6 +34,9 @@ class FakeStreamingPocService:
             "active": {
                 "rate": payload.rate,
                 "duration_seconds": payload.duration_seconds,
+                "payment_create_pct": payload.payment_create_pct,
+                "status_update_pct": payload.status_update_pct,
+                "taxpayer_move_pct": payload.taxpayer_move_pct,
             },
         }
 
@@ -56,14 +59,54 @@ def test_streaming_poc_status_endpoint_returns_pipeline_state():
     assert body["health"]["kafka"]["status"] == "healthy"
 
 
-def test_streaming_poc_start_accepts_rate_and_duration():
+def test_streaming_poc_start_accepts_events_per_second_and_editable_mix():
+    response = client().post(
+        "/api/streaming-poc/start",
+        json={
+            "rate": 10,
+            "duration_seconds": 600,
+            "payment_create_pct": 70,
+            "status_update_pct": 20,
+            "taxpayer_move_pct": 10,
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["active"] == {
+        "rate": 10.0,
+        "duration_seconds": 600,
+        "payment_create_pct": 70.0,
+        "status_update_pct": 20.0,
+        "taxpayer_move_pct": 10.0,
+    }
+
+
+def test_streaming_poc_start_defaults_to_80_15_5_mix():
     response = client().post(
         "/api/streaming-poc/start",
         json={"rate": 10, "duration_seconds": 600},
     )
 
     assert response.status_code == 201
-    assert response.json()["active"] == {"rate": 10.0, "duration_seconds": 600}
+    active = response.json()["active"]
+    assert active["payment_create_pct"] == 80.0
+    assert active["status_update_pct"] == 15.0
+    assert active["taxpayer_move_pct"] == 5.0
+
+
+def test_streaming_poc_rejects_mix_that_does_not_total_100():
+    response = client().post(
+        "/api/streaming-poc/start",
+        json={
+            "rate": 10,
+            "duration_seconds": 600,
+            "payment_create_pct": 70,
+            "status_update_pct": 20,
+            "taxpayer_move_pct": 5,
+        },
+    )
+
+    assert response.status_code == 422
 
 
 def test_streaming_poc_stop_endpoint_stops_the_source_workload():
