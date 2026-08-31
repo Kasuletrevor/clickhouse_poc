@@ -36,3 +36,22 @@ def test_payments_cdc_page_is_wired_to_the_streaming_poc_backend():
     assert 'api("/api/streaming-poc/status")' in page
     assert 'api("/api/streaming-poc/start"' in page
     assert 'api("/api/streaming-poc/stop"' in page
+
+
+def test_payments_cdc_page_uses_editable_events_per_second_and_mix_controls():
+    page = PAGE_JS.read_text()
+
+    assert "events/sec" in page
+    assert 'id="payments-cdc-create-pct"' in page
+    assert 'id="payments-cdc-update-pct"' in page
+    assert 'id="payments-cdc-move-pct"' in page
+    assert "payment_create_pct" in page
+    assert "status_update_pct" in page
+    assert "taxpayer_move_pct" in page
+
+
+def test_payments_cdc_page_preserves_draft_inputs_during_one_second_polling():
+    page = PAGE_JS.read_text()
+
+    assert "this.draft" in page
+    assert "captureDraft" in page
