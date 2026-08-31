@@ -28,6 +28,35 @@ signal.signal(signal.SIGINT, stop_handler)
 signal.signal(signal.SIGTERM, stop_handler)
 
 
+def interval_for_rate(events_per_second=None, transactions_per_minute=None):
+    if events_per_second is not None:
+        rate = float(events_per_second)
+        if rate <= 0:
+            raise ValueError("events_per_second must be greater than zero")
+        return 1.0 / rate
+
+    if transactions_per_minute is not None:
+        rate = float(transactions_per_minute)
+        if rate <= 0:
+            raise ValueError("transactions_per_minute must be greater than zero")
+        return 60.0 / rate
+
+    raise ValueError("A workload rate is required")
+
+
+def workload_weights(payment_create_pct=80, status_update_pct=15, taxpayer_move_pct=5):
+    weights = [
+        float(payment_create_pct),
+        float(status_update_pct),
+        float(taxpayer_move_pct),
+    ]
+    if any(weight < 0 for weight in weights):
+        raise ValueError("Workload mix percentages cannot be negative")
+    if abs(sum(weights) - 100.0) > 1e-6:
+        raise ValueError("Workload mix percentages must total 100")
+    return weights
+
+
 def connect():
     return oracledb.connect(
         user=DB_USER,
@@ -44,7 +73,6 @@ def payment_id(counter):
 def create_payment(conn, counter):
     taxpayer = random.choice(TAXPAYERS)
 
-    # realistic-ish payment amounts
     amount = random.choice([
         150000,
         250000,
@@ -58,7 +86,6 @@ def create_payment(conn, counter):
         2500000,
     ])
 
-    # Mostly successful, but some pending transactions
     status = random.choices(
         ["SUCCESSFUL", "PENDING"],
         weights=[85, 15],
@@ -109,7 +136,6 @@ def create_payment(conn, counter):
 
 def complete_pending_payment(conn):
     with conn.cursor() as cur:
-
         cur.execute(
             """
             SELECT PAYMENT_ID
@@ -192,38 +218,59 @@ def move_taxpayer(conn):
     )
 
 
-def run(transactions_per_minute):
+def run(
+    events_per_second=None,
+    transactions_per_minute=None,
+    payment_create_pct=80,
+    status_update_pct=15,
+    taxpayer_move_pct=5,
+):
+    global running
+    running = True
+
     if not DB_PASSWORD:
         raise RuntimeError("CDC_APP_PASSWORD is not set")
 
-    interval = 60 / transactions_per_minute
+    interval = interval_for_rate(
+        events_per_second=events_per_second,
+        transactions_per_minute=transactions_per_minute,
+    )
+    weights = workload_weights(
+        payment_create_pct,
+        status_update_pct,
+        taxpayer_move_pct,
+    )
+
+    if events_per_second is not None:
+        rate_label = f"{float(events_per_second):g} events/sec"
+    else:
+        rate_label = f"{float(transactions_per_minute):g} transactions/min"
 
     print()
     print("CDC SOURCE SYSTEM SIMULATOR")
     print("===========================")
-    print(f"Rate     : {transactions_per_minute} transactions/min")
-    print(f"Interval : approximately {interval:.1f} seconds")
+    print(f"Rate     : {rate_label}")
+    print(f"Interval : approximately {interval:.4f} seconds")
+    print(
+        "Mix      : "
+        f"{weights[0]:g}% payment / "
+        f"{weights[1]:g}% status update / "
+        f"{weights[2]:g}% taxpayer move"
+    )
     print(f"Oracle   : {DB_DSN}")
     print()
     print("Ctrl+C to stop.")
     print()
 
     counter = 1
+    next_event_at = time.monotonic()
 
     with connect() as conn:
-
         while running:
             try:
-                #
-                # Business event distribution:
-                #
-                # 80% new payment
-                # 15% pending -> successful update
-                #  5% taxpayer station movement
-                #
                 action = random.choices(
                     ["payment", "complete", "move"],
-                    weights=[80, 15, 5],
+                    weights=weights,
                     k=1,
                 )[0]
 
@@ -247,7 +294,12 @@ def run(transactions_per_minute):
                 except Exception:
                     pass
 
-            time.sleep(interval)
+            next_event_at += interval
+            sleep_for = next_event_at - time.monotonic()
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+            else:
+                next_event_at = time.monotonic()
 
 
 def main():
@@ -255,15 +307,36 @@ def main():
         description="Continuous Oracle workload for CDC POC"
     )
 
-    parser.add_argument(
+    rate_group = parser.add_mutually_exclusive_group()
+    rate_group.add_argument(
+        "--transactions-per-second",
+        type=float,
+        default=None,
+    )
+    rate_group.add_argument(
         "--transactions-per-minute",
         type=float,
-        default=10,
+        default=None,
     )
+
+    parser.add_argument("--payment-create-pct", type=float, default=80.0)
+    parser.add_argument("--status-update-pct", type=float, default=15.0)
+    parser.add_argument("--taxpayer-move-pct", type=float, default=5.0)
 
     args = parser.parse_args()
 
-    run(args.transactions_per_minute)
+    events_per_second = args.transactions_per_second
+    transactions_per_minute = args.transactions_per_minute
+    if events_per_second is None and transactions_per_minute is None:
+        transactions_per_minute = 10.0
+
+    run(
+        events_per_second=events_per_second,
+        transactions_per_minute=transactions_per_minute,
+        payment_create_pct=args.payment_create_pct,
+        status_update_pct=args.status_update_pct,
+        taxpayer_move_pct=args.taxpayer_move_pct,
+    )
 
 
 if __name__ == "__main__":
