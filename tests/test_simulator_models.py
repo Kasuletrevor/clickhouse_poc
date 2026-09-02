@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from app.simulator.models import RunConfig, make_run_identity
+from app.simulator.models import RunConfig, RunRecord, make_run_identity
 
 
 def test_finite_config_has_exact_target_event_count():
@@ -17,3 +17,24 @@ def test_run_identity_is_traceable_and_source_ids_fit_oracle_column():
     assert run_id == "EFR-20260806-084701-A1"
     assert prefix == "S260806A1"
     assert len(f"{prefix}-999999") <= 32
+
+
+def test_legacy_run_state_ignores_retired_fields_when_loading():
+    payload = {
+        "run_id": "EFR-20260806-084701-A1",
+        "source_prefix": "S260806A1",
+        "status": "completed",
+        "command": "stop",
+        "rate": 14.0,
+        "duration_seconds": 60,
+        "target_events": 840,
+        "retry_probability": 0.12,
+        "random_seed": 1,
+        "gap_clickhouse_received": 37,
+    }
+
+    run = RunRecord.from_dict(payload)
+
+    assert run.run_id == "EFR-20260806-084701-A1"
+    assert run.status == "completed"
+    assert not hasattr(run, "gap_clickhouse_received")
