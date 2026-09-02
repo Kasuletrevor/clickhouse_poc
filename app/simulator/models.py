@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from secrets import choice
 from string import ascii_uppercase, digits
@@ -68,7 +68,13 @@ class RunRecord:
 
     @classmethod
     def from_dict(cls, payload: dict) -> "RunRecord":
-        return cls(**payload)
+        current_fields = {item.name for item in fields(cls)}
+        compatible_payload = {
+            key: value
+            for key, value in payload.items()
+            if key in current_fields
+        }
+        return cls(**compatible_payload)
 
 
 def utc_now_iso() -> str:
